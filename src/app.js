@@ -81,28 +81,45 @@ export default function App() {
   const [saving,setSaving]=useState(false);
   const [loadMsg,setLoadMsg]=useState("Carregando...");
 
-  useEffect(()=>{ initGapi(); },[]);
+  useEffect(() => {
+    if (window.gapi) { initGapi(); }
+    else {
+      const interval = setInterval(() => {
+        if (window.gapi) { clearInterval(interval); initGapi(); }
+      }, 100);
+    }
+  }, []);
 
   const initGapi = () => {
-    const s=document.createElement("script");
-    s.src="https://apis.google.com/js/api.js";
-    s.onload=()=>{
-      window.gapi.load("client:auth2",async()=>{
-        try {
-          await window.gapi.client.init({ apiKey:API_KEY, clientId:CLIENT_ID, scope:"https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file", discoveryDocs:["https://sheets.googleapis.com/$discovery/rest?version=v4"] });
-          const auth=window.gapi.auth2.getAuthInstance();
-          if(auth.isSignedIn.get()){ const tk=auth.currentUser.get().getAuthResponse().access_token; setToken(tk); setAuthStatus("ok"); loadAll(tk); }
-          else { setAuthStatus("idle"); setLoadMsg(""); }
-        } catch(e){ setAuthStatus("error"); setLoadMsg("Erro: "+e.message); }
-      });
-    };
-    document.head.appendChild(s);
+    window.gapi.load("client:auth2", async () => {
+      try {
+        await window.gapi.client.init({
+          apiKey: API_KEY,
+          clientId: CLIENT_ID,
+          scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file",
+          discoveryDocs: ["https://sheets.googleapis.com/$discovery/rest?version=v4"]
+        });
+        const auth = window.gapi.auth2.getAuthInstance();
+        if (auth.isSignedIn.get()) {
+          const tk = auth.currentUser.get().getAuthResponse().access_token;
+          setToken(tk); setAuthStatus("ok"); loadAll(tk);
+        } else {
+          setAuthStatus("idle"); setLoadMsg("");
+        }
+      } catch(e) { setAuthStatus("error"); setLoadMsg("Erro: " + e.message); }
+    });
   };
 
-  const signIn=async()=>{
+  const signIn = async () => {
     setAuthStatus("loading"); setLoadMsg("Abrindo login...");
-    try { const auth=window.gapi.auth2.getAuthInstance(); await auth.signIn(); const tk=auth.currentUser.get().getAuthResponse().access_token; setToken(tk); setAuthStatus("ok"); loadAll(tk); }
-    catch(e){ setAuthStatus("idle"); setLoadMsg(""); }
+    try {
+      const auth = window.gapi.auth2.getAuthInstance();
+      const user = await auth.signIn({ prompt: "select_account" });
+      const tk = user.getAuthResponse().access_token;
+      setToken(tk); setAuthStatus("ok"); loadAll(tk);
+    } catch(e) {
+      setAuthStatus("idle"); setLoadMsg("");
+    }
   };
 
   const loadAll=async(tk)=>{
