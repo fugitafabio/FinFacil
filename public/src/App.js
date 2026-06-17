@@ -100,7 +100,18 @@ export default function App() {
   const [saving,setSaving]=useState(false);
   const [loadMsg,setLoadMsg]=useState("Carregando...");
 
- const loadAll = async (tk) => {
+  // ✅ BUG 1 CORRIGIDO — ensureHeaders declarada ANTES de loadAll
+  const ensureHeaders = useCallback(async (tk) => {
+    const check = async (range, headers) => {
+      const rows = await sheetsGet(tk, range+"!A1:Z1");
+      if (!rows.length || !rows[0].length) await sheetsWrite(tk, range+"!A1", [headers]);
+    };
+    await check("Produtos", ["id","nome","tipo","preco","descricao"]);
+    await check("Vendas", ["id","productId","qty","data","nota","mes","ano"]);
+    await check("Despesas", ["id","descricao","categoria","valor","data","mes","ano"]);
+  }, []);
+
+  const loadAll = useCallback(async (tk) => {
     setLoadMsg("Carregando dados...");
     try {
       await ensureHeaders(tk);
@@ -114,97 +125,121 @@ export default function App() {
       setExpensesState(er.length>1?rowsToExpenses(er):[]);
       setLoadMsg("");
     } catch(e) { setLoadMsg("Erro ao carregar: "+e.message); }
-  };
-  
-useEffect(() => {
-  const waitForLibraries = setInterval(() => {
-    if (window.gapi && window.google) {
-      clearInterval(waitForLibraries);
-      window.gapi.load("client", async () => {
-        try {
-          await window.gapi.client.init({
-            apiKey: API_KEY,
-            discoveryDocs: [
-              "https://sheets.googleapis.com/$discovery/rest?version=v4"
-            ]
-          });
-          setAuthStatus("idle");
-          setLoadMsg("");
-        } catch (e) {
-          setAuthStatus("error");
-          setLoadMsg("Erro ao inicializar: " + e.message);
-        }
-      });
-    }
-  }, 200);
+  }, [ensureHeaders]);
 
-  return () => clearInterval(waitForLibraries);
-}, []);
-
-const signIn = () => {
-  if (!window.google) {
-    setLoadMsg("Biblioteca Google não carregou. Recarregue a página.");
-    return;
-  }
-
-  setAuthStatus("loading");
-  setLoadMsg("Abrindo login...");
-
-  const tokenClient = window.google.accounts.oauth2.initTokenClient({
-    client_id: CLIENT_ID,
-    scope: [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive.file"
-    ].join(" "),
-    callback: (resp) => {
-      if (resp && resp.access_token) {
-        setToken(resp.access_token);
-        setAuthStatus("ok");
-        loadAll(resp.access_token);
-      } else {
-        setAuthStatus("error");
-        setLoadMsg("Login cancelado ou falhou. Tente novamente.");
+  useEffect(() => {
+    const waitForLibraries = setInterval(() => {
+      if (window.gapi && window.google) {
+        clearInterval(waitForLibraries);
+        window.gapi.load("client", async () => {
+          try {
+            await window.gapi.client.init({
+              apiKey: API_KEY,
+              discoveryDocs: ["https://sheets.googleapis.com/$discovery/rest?version=v4"]
+            });
+            setAuthStatus("idle");
+            setLoadMsg("");
+          } catch (e) {
+            setAuthStatus("error");
+            setLoadMsg("Erro ao inicializar: " + e.message);
+          }
+        });
       }
-    },
-    error_callback: (err) => {
-      setAuthStatus("error");
-      setLoadMsg("Erro OAuth: " + (err?.type || "desconhecido"));
+    }, 200);
+    return () => clearInterval(waitForLibraries);
+  }, []);
+
+  const signIn = useCallback(() => {
+    if (!window.google) {
+      setLoadMsg("Biblioteca Google não carregou. Recarregue a página.");
+      return;
     }
-  });
-
-  tokenClient.requestAccessToken({ prompt: "select_account" });
-};
-
- 
-
-  const ensureHeaders = async (tk) => {
-    const check = async (range, headers) => {
-      const rows = await sheetsGet(tk, range+"!A1:Z1");
-      if (!rows.length || !rows[0].length) await sheetsWrite(tk, range+"!A1", [headers]);
-    };
-    await check("Produtos", ["id","nome","tipo","preco","descricao"]);
-    await check("Vendas", ["id","productId","qty","data","nota","mes","ano"]);
-    await check("Despesas", ["id","descricao","categoria","valor","data","mes","ano"]);
-  };
+    setAuthStatus("loading");
+    setLoadMsg("Abrindo login...");
+    const tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: CLIENT_ID,
+      scope: [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.file"
+      ].join(" "),
+      callback: (resp) => {
+        if (resp && resp.access_token) {
+          setToken(resp.access_token);
+          setAuthStatus("ok");
+          loadAll(resp.access_token);
+        } else {
+          setAuthStatus("error");
+          setLoadMsg("Login cancelado ou falhou. Tente novamente.");
+        }
+      },
+      error_callback: (err) => {
+        setAuthStatus("error");
+        setLoadMsg("Erro OAuth: " + (err?.type || "desconhecido"));
+      }
+    });
+    tokenClient.requestAccessToken({ prompt: "select_account" });
+  }, [loadAll]);
 
   const saveProducts = useCallback(async (data) => {
-    if (!token) return; setSaving(true);
-    try { await sheetsClear(token,"Produtos!A:E"); await sheetsWrite(token,"Produtos!A1",[["id","nome","tipo","preco","descricao"],...data.map(p=>[p.id,p.name,p.cat,p.price,p.desc])]); } finally { setSaving(false); }
-  },[token]);
+    if (!token) return;
+    setSaving(true);
+    try {
+      await sheetsClear(token,"Produtos!A:E");
+      await sheetsWrite(token,"Produtos!A1",[
+        ["id","nome","tipo","preco","descricao"],
+        ...data.map(p=>[p.id,p.name,p.cat,p.price,p.desc])
+      ]);
+    } finally { setSaving(false); }
+  }, [token]);
 
   const saveSales = useCallback(async (data) => {
-    if (!token) return; setSaving(true);
-    try { await sheetsClear(token,"Vendas!A:G"); await sheetsWrite(token,"Vendas!A1",[["id","productId","qty","data","nota","mes","ano"],...data.map(s=>[s.id,s.productId,s.qty,s.date,s.note,s.month,s.year])]); } finally { setSaving(false); }
-  },[token]);
+    if (!token) return;
+    setSaving(true);
+    try {
+      await sheetsClear(token,"Vendas!A:G");
+      await sheetsWrite(token,"Vendas!A1",[
+        ["id","productId","qty","data","nota","mes","ano"],
+        ...data.map(s=>[s.id,s.productId,s.qty,s.date,s.note,s.month,s.year])
+      ]);
+    } finally { setSaving(false); }
+  }, [token]);
 
   const saveExpenses = useCallback(async (data) => {
-    if (!token) return; setSaving(true);
-    try { await sheetsClear(token,"Despesas!A:G"); await sheetsWrite(token,"Despesas!A1",[["id","descricao","categoria","valor","data","mes","ano"],...data.map(e=>[e.id,e.desc,e.cat,e.value,e.date,e.month,e.year])]); } finally { setSaving(false); }
-  },[token]);
+    if (!token) return;
+    setSaving(true);
+    try {
+      await sheetsClear(token,"Despesas!A:G");
+      await sheetsWrite(token,"Despesas!A1",[
+        ["id","descricao","categoria","valor","data","mes","ano"],
+        ...data.map(e=>[e.id,e.desc,e.cat,e.value,e.date,e.month,e.year])
+      ]);
+    } finally { setSaving(false); }
+  }, [token]);
 
-  const setProducts = (fn) => { const next=typeof fn==="function"?fn(products):fn; setProductsState(next); saveProducts(next); };
-  const setSales = (fn) => { const next=typeof fn==="function"?fn(sales):fn; setSalesState(next); saveSales(next); };
-  const setExpenses = (fn) => { const next=typeof fn==="function"?fn(expenses):fn; setExpensesState(next); saveExpenses(next); };
+  // ✅ BUG 2 CORRIGIDO — useCallback + updater function para evitar stale closure
+  const setProducts = useCallback((fn) => {
+    setProductsState(prev => {
+      const next = typeof fn === "function" ? fn(prev) : fn;
+      saveProducts(next);
+      return next;
+    });
+  }, [saveProducts]);
+
+  const setSales = useCallback((fn) => {
+    setSalesState(prev => {
+      const next = typeof fn === "function" ? fn(prev) : fn;
+      saveSales(next);
+      return next;
+    });
+  }, [saveSales]);
+
+  const setExpenses = useCallback((fn) => {
+    setExpensesState(prev => {
+      const next = typeof fn === "function" ? fn(prev) : fn;
+      saveExpenses(next);
+      return next;
+    });
+  }, [saveExpenses]);
 
   const filteredSales = useMemo(()=>{
     if (period==="month") return sales.filter(s=>s.month===selMonth&&s.year===selYear);
@@ -237,11 +272,11 @@ const signIn = () => {
     <div style={{minHeight:"100vh",background:"#f0f4ff",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
       <div style={{background:"#fff",borderRadius:16,padding:40,maxWidth:400,width:"100%",textAlign:"center",boxShadow:"0 2px 12px rgba(0,0,0,.07)"}}>
         <div style={{fontSize:56,marginBottom:12}}>💼</div>
-        <h1 style={{margin:"0 0 8px",fontSize:24,fontWeight:800}}>FinançasFáceis</h1>
+        <h1 style={{margin:"0 0 8px",fontSize:24,fontWeight:800}}>FinFacil</h1>
         <p style={{color:"#6b7280",marginBottom:24}}>Controle financeiro sincronizado com Google Sheets</p>
         {authStatus==="error"&&<p style={{color:"#ef4444",marginBottom:16,fontSize:14}}>{loadMsg}</p>}
         <Btn onClick={signIn} color="green">🔗 Entrar com Google</Btn>
-        <p style={{fontSize:12,color:"#9ca3af",marginTop:16}}>Seus dados ficam salvos na planilha<br/><strong>FinançasFáceis — Dados</strong> no seu Drive</p>
+        <p style={{fontSize:12,color:"#9ca3af",marginTop:16}}>Seus dados ficam salvos na planilha<br/><strong>FinFacil — Dados</strong> no seu Drive</p>
       </div>
     </div>
   );
@@ -250,7 +285,7 @@ const signIn = () => {
     <div style={{minHeight:"100vh",background:"#f0f4ff",fontFamily:"'Segoe UI',sans-serif"}}>
       <div style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",padding:"16px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 16px rgba(99,102,241,.3)"}}>
         <div>
-          <div style={{color:"#fff",fontWeight:800,fontSize:20}}>💼 FinançasFáceis</div>
+          <div style={{color:"#fff",fontWeight:800,fontSize:20}}>💼 FinFacil</div>
           <div style={{color:"#c4b5fd",fontSize:11}}>{saving?"💾 Salvando...":"✅ Sincronizado com Google Sheets"}</div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -370,7 +405,8 @@ function Products({products,setProducts,fmt,sales}){
   </div>;
 }
 
-function Sales({sales,setSales,products,filteredSales,fmt}){
+// ✅ BUG 3 CORRIGIDO — selMonth e selYear declarados nos props
+function Sales({sales,setSales,products,filteredSales,fmt,selMonth,selYear}){
   const [form,setForm]=useState({productId:"",qty:"1",date:new Date().toISOString().slice(0,10),note:""});
   const [editing,setEditing]=useState(null);
   const [confirm,setConfirm]=useState(null);
