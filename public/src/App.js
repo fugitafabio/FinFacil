@@ -100,8 +100,6 @@ export default function App() {
   const [saving,setSaving]=useState(false);
   const [loadMsg,setLoadMsg]=useState("Carregando...");
 
- // Substitua seu useEffect e signIn por este bloco:
-
 useEffect(() => {
   const waitForLibraries = setInterval(() => {
     if (window.gapi && window.google) {
