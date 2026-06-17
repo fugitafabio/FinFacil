@@ -100,6 +100,22 @@ export default function App() {
   const [saving,setSaving]=useState(false);
   const [loadMsg,setLoadMsg]=useState("Carregando...");
 
+ const loadAll = async (tk) => {
+    setLoadMsg("Carregando dados...");
+    try {
+      await ensureHeaders(tk);
+      const [pr,sr,er] = await Promise.all([
+        sheetsGet(tk,"Produtos!A:E"),
+        sheetsGet(tk,"Vendas!A:G"),
+        sheetsGet(tk,"Despesas!A:G"),
+      ]);
+      setProductsState(pr.length>1?rowsToProducts(pr):[]);
+      setSalesState(sr.length>1?rowsToSales(sr):[]);
+      setExpensesState(er.length>1?rowsToExpenses(er):[]);
+      setLoadMsg("");
+    } catch(e) { setLoadMsg("Erro ao carregar: "+e.message); }
+  };
+  
 useEffect(() => {
   const waitForLibraries = setInterval(() => {
     if (window.gapi && window.google) {
@@ -159,21 +175,7 @@ const signIn = () => {
   tokenClient.requestAccessToken({ prompt: "select_account" });
 };
 
-  const loadAll = async (tk) => {
-    setLoadMsg("Carregando dados...");
-    try {
-      await ensureHeaders(tk);
-      const [pr,sr,er] = await Promise.all([
-        sheetsGet(tk,"Produtos!A:E"),
-        sheetsGet(tk,"Vendas!A:G"),
-        sheetsGet(tk,"Despesas!A:G"),
-      ]);
-      setProductsState(pr.length>1?rowsToProducts(pr):[]);
-      setSalesState(sr.length>1?rowsToSales(sr):[]);
-      setExpensesState(er.length>1?rowsToExpenses(er):[]);
-      setLoadMsg("");
-    } catch(e) { setLoadMsg("Erro ao carregar: "+e.message); }
-  };
+ 
 
   const ensureHeaders = async (tk) => {
     const check = async (range, headers) => {
