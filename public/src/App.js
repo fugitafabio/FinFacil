@@ -100,35 +100,66 @@ export default function App() {
   const [saving,setSaving]=useState(false);
   const [loadMsg,setLoadMsg]=useState("Carregando...");
 
-  useEffect(()=>{ initGapi(); },[]);
+ // Substitua seu useEffect e signIn por este bloco:
 
-  const initGapi = () => {
-    const s = document.createElement("script");
-    s.src = "https://apis.google.com/js/api.js";
-    s.onload = () => {
-      window.gapi.load("client:auth2", async () => {
+useEffect(() => {
+  const waitForLibraries = setInterval(() => {
+    if (window.gapi && window.google) {
+      clearInterval(waitForLibraries);
+      window.gapi.load("client", async () => {
         try {
-          await window.gapi.client.init({ apiKey:API_KEY, clientId:CLIENT_ID, scope:"https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file", discoveryDocs:["https://sheets.googleapis.com/$discovery/rest?version=v4"] });
-          const auth = window.gapi.auth2.getAuthInstance();
-          if (auth.isSignedIn.get()) {
-            const tk = auth.currentUser.get().getAuthResponse().access_token;
-            setToken(tk); setAuthStatus("ok"); loadAll(tk);
-          } else { setAuthStatus("idle"); setLoadMsg(""); }
-        } catch(e) { setAuthStatus("error"); setLoadMsg("Erro: "+e.message); }
+          await window.gapi.client.init({
+            apiKey: API_KEY,
+            discoveryDocs: [
+              "https://sheets.googleapis.com/$discovery/rest?version=v4"
+            ]
+          });
+          setAuthStatus("idle");
+          setLoadMsg("");
+        } catch (e) {
+          setAuthStatus("error");
+          setLoadMsg("Erro ao inicializar: " + e.message);
+        }
       });
-    };
-    document.head.appendChild(s);
-  };
+    }
+  }, 200);
 
-  const signIn = async () => {
-    setAuthStatus("loading"); setLoadMsg("Abrindo login Google...");
-    try {
-      const auth = window.gapi.auth2.getAuthInstance();
-      await auth.signIn();
-      const tk = auth.currentUser.get().getAuthResponse().access_token;
-      setToken(tk); setAuthStatus("ok"); loadAll(tk);
-    } catch(e) { setAuthStatus("idle"); setLoadMsg(""); }
-  };
+  return () => clearInterval(waitForLibraries);
+}, []);
+
+const signIn = () => {
+  if (!window.google) {
+    setLoadMsg("Biblioteca Google não carregou. Recarregue a página.");
+    return;
+  }
+
+  setAuthStatus("loading");
+  setLoadMsg("Abrindo login...");
+
+  const tokenClient = window.google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: [
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/drive.file"
+    ].join(" "),
+    callback: (resp) => {
+      if (resp && resp.access_token) {
+        setToken(resp.access_token);
+        setAuthStatus("ok");
+        loadAll(resp.access_token);
+      } else {
+        setAuthStatus("error");
+        setLoadMsg("Login cancelado ou falhou. Tente novamente.");
+      }
+    },
+    error_callback: (err) => {
+      setAuthStatus("error");
+      setLoadMsg("Erro OAuth: " + (err?.type || "desconhecido"));
+    }
+  });
+
+  tokenClient.requestAccessToken({ prompt: "select_account" });
+};
 
   const loadAll = async (tk) => {
     setLoadMsg("Carregando dados...");
