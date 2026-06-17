@@ -110,17 +110,28 @@ export default function App() {
     });
   };
 
-  const signIn = async () => {
-    setAuthStatus("loading"); setLoadMsg("Abrindo login...");
-    try {
-      const auth = window.gapi.auth2.getAuthInstance();
-      const user = await auth.signIn({ prompt: "select_account" });
-      const tk = user.getAuthResponse().access_token;
-      setToken(tk); setAuthStatus("ok"); loadAll(tk);
-    } catch(e) {
-      setAuthStatus("idle"); setLoadMsg("");
+ const signIn = () => {
+  const client = window.google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file",
+    callback: (resp) => {
+      if (resp && resp.access_token) {
+        setToken(resp.access_token);
+        setAuthStatus("ok");
+        loadAll(resp.access_token);
+      } else {
+        setAuthStatus("error");
+        setLoadMsg("Erro ao autenticar. Tente novamente.");
+      }
+    },
+    error_callback: (err) => {
+      console.error("OAuth error:", err);
+      setAuthStatus("error");
+      setLoadMsg("Erro: " + (err.message || err.type || "desconhecido"));
     }
-  };
+  });
+  client.requestAccessToken({ prompt: "consent" });
+};
 
   const loadAll=async(tk)=>{
     setLoadMsg("Carregando dados...");
