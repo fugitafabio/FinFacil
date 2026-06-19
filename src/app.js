@@ -1194,203 +1194,578 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
 }
 
 // ─────────────────────────────────────────────
-// ✅ NOVO — Pricing (Calculadora de Preços)
+// Pricing — Calculadora de Precificação Detalhada
 // ─────────────────────────────────────────────
-function Pricing({ products, expenses, fmt }) {
-  const [selectedProduct, setSelectedProduct] = useState("");
-  const [desiredMargin,   setDesiredMargin]   = useState("30");
-  const [monthlyUnits,    setMonthlyUnits]     = useState("10");
-  const [extraCost,       setExtraCost]        = useState("0");
-
-  // Calcula total de custos fixos e variáveis mensais
+function Pricing({ products, expenses, setProducts, fmt }) {
   const currentMonth = new Date().getMonth() + 1;
   const currentYear  = new Date().getFullYear();
 
-  const monthlyFixed = useMemo(() =>
-    expenses
-      .filter(e => e.cat === "fixo" && e.month === currentMonth && e.year === currentYear)
+  // ── Produto base (opcional)
+  const [selectedProduct, setSelectedProduct] = useState("");
+
+  // ── Matéria-prima: lista de itens
+  const emptyMaterial = { id: uid(), name: "", cost: "" };
+  const [materials, setMaterials] = useState([{ ...emptyMaterial, id: uid() }]);
+
+  // ── Embalagem & Logística
+  const [packaging,    setPackaging]    = useState("");   // custo embalagem
+  const [shipping,     setShipping]     = useState("");   // custo postagem/frete
+  const [shippingMode, setShippingMode] = useState("fixed"); // fixed | percent
+  const [otherCosts,   setOtherCosts]   = useState("");   // outros custos diretos
+
+  // ── Mão de obra
+  const [laborHours,   setLaborHours]   = useState("");   // horas trabalhadas
+  const [hourlyRate,   setHourlyRate]   = useState("");   // valor por hora (R$)
+
+  // ── Custos fixos rateados
+  const [useFixedCosts, setUseFixedCosts] = useState(true);
+  const [monthlyUnits,  setMonthlyUnits]  = useState("10");
+
+  // ── Margem & Impostos
+  const [margin,   setMargin]   = useState("30");
+  const [taxRate,  setTaxRate]  = useState("0");
+
+  // ── Resultado salvo
+  const [savedName, setSavedName] = useState("");
+  const [showSave,  setShowSave]  = useState(false);
+
+  // ─── Custos fixos do mês atual vindos das despesas
+  const monthlyFixed = useMemo(
+    () => expenses
+      .filter(e => ["fixo","marketing","financeiro"].includes(e.cat) && e.month === currentMonth && e.year === currentYear)
       .reduce((s, e) => s + e.value, 0),
-  [expenses, currentMonth, currentYear]);
+    [expenses, currentMonth, currentYear]
+  );
 
-  const monthlyVariable = useMemo(() =>
-    expenses
-      .filter(e => e.cat === "variavel" && e.month === currentMonth && e.year === currentYear)
-      .reduce((s, e) => s + e.value, 0),
-  [expenses, currentMonth, currentYear]);
+  // ─── Cálculos
+  const materialTotal = useMemo(
+    () => materials.reduce((s, m) => s + (parseFloat(m.cost) || 0), 0),
+    [materials]
+  );
 
-  const monthlyLabor = useMemo(() =>
-    expenses
-      .filter(e => e.cat === "pessoal" && e.month === currentMonth && e.year === currentYear)
-      .reduce((s, e) => s + e.value, 0),
-  [expenses, currentMonth, currentYear]);
+  const laborTotal = useMemo(
+    () => (parseFloat(laborHours) || 0) * (parseFloat(hourlyRate) || 0),
+    [laborHours, hourlyRate]
+  );
 
-  const totalMonthlyCost = monthlyFixed + monthlyVariable + monthlyLabor;
+  const packagingVal  = parseFloat(packaging)   || 0;
+  const otherVal      = parseFloat(otherCosts)  || 0;
+  const units         = Math.max(1, parseInt(monthlyUnits) || 1);
+  const fixedPerUnit  = useFixedCosts && monthlyFixed > 0 ? monthlyFixed / units : 0;
 
-  const product      = products.find(p => p.id === selectedProduct);
-  const units        = Math.max(1, Number(monthlyUnits) || 1);
-  const margin       = Math.min(99, Math.max(0, Number(desiredMargin) || 0));
-  const extra        = Math.max(0, parseFloat(extraCost) || 0);
+  // Custo total direto (sem frete — frete pode ser embutido ou separado)
+  const directCost = materialTotal + laborTotal + packagingVal + otherVal + fixedPerUnit;
 
-  // Custo por unidade = (custos mensais totais / unidades) + custo extra unitário
-  const costPerUnit  = totalMonthlyCost > 0 ? (totalMonthlyCost / units) + extra : extra;
+  // Frete
+  const shippingVal = shippingMode === "fixed"
+    ? (parseFloat(shipping) || 0)
+    : directCost * ((parseFloat(shipping) || 0) / 100);
 
-  // Preço sugerido = custo / (1 - margem%)
-  const suggestedPrice = margin < 100 ? costPerUnit / (1 - margin / 100) : 0;
+  const totalCost = directCost + shippingVal;
 
-  // Comparação com preço atual
-  const currentPrice   = product ? product.price : 0;
-  const priceDiff      = currentPrice - suggestedPrice;
-  const priceStatus    =
-    !product           ? null :
-    priceDiff > 0.01   ? "above" :   // preço atual acima do sugerido ✅
-    priceDiff < -0.01  ? "below" :   // preço atual abaixo do sugerido ⚠️
-                         "ok";        // praticamente igual
+  const marginPct = Math.min(99, Math.max(0, parseFloat(margin) || 0));
+  const taxPct    = Math.min(99, Math.max(0, parseFloat(taxRate)  || 0));
 
-  // Lucro projetado mensal
-  const projectedRevenue = (product ? product.price : suggestedPrice) * units;
-  const projectedProfit  = projectedRevenue - totalMonthlyCost - (extra * units);
+  // Preço mínimo = custo / (1 - margem% - imposto%)
+  const deductions = (marginPct + taxPct) / 100;
+  const suggestedPrice = deductions < 1 ? totalCost / (1 - deductions) : 0;
+
+  // Faixas de preço
+  const priceMin  = suggestedPrice;
+  const priceMid  = suggestedPrice * 1.15;  // +15% margem extra
+  const priceMax  = suggestedPrice * 1.35;  // +35% premium
+
+  // Produto selecionado
+  const currentProduct = products.find(p => p.id === selectedProduct);
+  const currentPrice   = currentProduct ? currentProduct.price : null;
+
+  // Status de comparação
+  const priceStatus = currentPrice === null ? null
+    : currentPrice >= priceMin ? "ok" : "below";
+
+  // Projeção mensal
+  const projRevenue = suggestedPrice * units;
+  const projCost    = totalCost * units;
+  const projProfit  = projRevenue - projCost;
+
+  // ── Helpers matéria-prima
+  const addMaterial    = () => setMaterials(m => [...m, { id: uid(), name: "", cost: "" }]);
+  const removeMaterial = (id) => setMaterials(m => m.filter(x => x.id !== id));
+  const updateMaterial = (id, field, val) =>
+    setMaterials(m => m.map(x => x.id === id ? { ...x, [field]: val } : x));
+
+  // ── Salvar como produto
+  const handleSave = () => {
+    if (!savedName.trim()) return;
+    const newProd = {
+      id:    uid(),
+      name:  savedName.trim(),
+      cat:   "Produto",
+      price: parseFloat(suggestedPrice.toFixed(2)),
+      desc:  `Custo: ${fmt(totalCost)} · Margem: ${marginPct}%`
+    };
+    setProducts(p => [...p, newProd]);
+    setShowSave(false);
+    setSavedName("");
+    alert(`✅ "${newProd.name}" adicionado ao catálogo com o preço ${fmt(newProd.price)}!`);
+  };
+
+  const sectionTitle = (icon, title) => (
+    <div style={{
+      display:"flex", alignItems:"center", gap:8,
+      margin:"0 0 14px",
+      paddingBottom:8,
+      borderBottom:"2px solid #f3f4f6"
+    }}>
+      <span style={{ fontSize:20 }}>{icon}</span>
+      <span style={{ fontWeight:800, fontSize:16, color:"#1e293b" }}>{title}</span>
+    </div>
+  );
 
   return (
-    <div>
-      <h2 style={{ fontSize:22, fontWeight:800, marginBottom:4 }}>🧮 Calculadora de Preços</h2>
-      <p style={{ color:"#6b7280", fontSize:14, marginBottom:16 }}>
-        Descubra o preço mínimo para cobrir seus custos e atingir a margem desejada.
+    <div style={{ paddingBottom:20 }}>
+      <h2 style={{ fontSize:22, fontWeight:800, marginBottom:4 }}>🧮 Calculadora de Precificação</h2>
+      <p style={{ color:"#6b7280", fontSize:14, marginBottom:20 }}>
+        Insira todos os custos do produto e descubra o preço ideal de venda.
       </p>
 
-      {/* Resumo de custos do mês atual */}
-      <Card style={{ borderLeft:"4px solid #6366f1" }}>
-        <h3 style={{ margin:"0 0 12px", fontSize:15, fontWeight:700 }}>
-          📅 Custos do mês atual — {MONTHS[currentMonth - 1]}/{currentYear}
-        </h3>
-        {totalMonthlyCost === 0 ? (
-          <p style={{ color:"#9ca3af", fontSize:14 }}>
-            ⚠️ Nenhum custo registrado este mês. Cadastre despesas para um cálculo mais preciso.
-          </p>
-        ) : (
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+      {/* ── Seção 1: Produto base */}
+      <Card>
+        {sectionTitle("🛍️", "Produto")}
+        <Sel
+          label="Selecionar produto existente (opcional)"
+          value={selectedProduct}
+          onChange={v => {
+            setSelectedProduct(v);
+            const p = products.find(x => x.id === v);
+            if (p) setSavedName(p.name);
+          }}
+          hint="Vincule a um produto do catálogo para comparar preços"
+          options={[
+            { value:"", label:"— Novo cálculo —" },
+            ...products.map(p => ({ value: p.id, label: `${p.cat === "Serviço" ? "🛠️" : "📦"} ${p.name} — ${fmt(p.price)}` }))
+          ]}
+        />
+      </Card>
+
+      {/* ── Seção 2: Matéria-Prima */}
+      <Card>
+        {sectionTitle("🪵", "Custos de Matéria-Prima")}
+        <p style={{ fontSize:13, color:"#6b7280", marginBottom:12 }}>
+          Adicione cada insumo separadamente para maior precisão.
+        </p>
+
+        {materials.map((m, i) => (
+          <div key={m.id} style={{
+            display:"grid",
+            gridTemplateColumns:"1fr 140px 40px",
+            gap:8,
+            alignItems:"flex-start",
+            marginBottom:10
+          }}>
+            <div>
+              {i === 0 && <label style={{ display:"block", fontSize:13, fontWeight:600, color:"#374151", marginBottom:4 }}>Insumo / Material</label>}
+              <input
+                value={m.name}
+                onChange={e => updateMaterial(m.id, "name", e.target.value)}
+                placeholder={`Ex: ${["Cera de soja","Essência","Pavê","Corante","Fio de algodão"][i % 5]}`}
+                style={{
+                  width:"100%", padding:"9px 12px",
+                  border:"1.5px solid #e5e7eb", borderRadius:10,
+                  fontSize:14, outline:"none", background:"#f9fafb",
+                  boxSizing:"border-box"
+                }}
+              />
+            </div>
+            <div>
+              {i === 0 && <label style={{ display:"block", fontSize:13, fontWeight:600, color:"#374151", marginBottom:4 }}>Custo (R$)</label>}
+              <div style={{ display:"flex", alignItems:"center", border:"1.5px solid #e5e7eb", borderRadius:10, background:"#f9fafb", overflow:"hidden" }}>
+                <span style={{ padding:"0 8px", color:"#6b7280", fontSize:13, fontWeight:700, borderRight:"1.5px solid #e5e7eb", background:"#f3f4f6", alignSelf:"stretch", display:"flex", alignItems:"center" }}>R$</span>
+                <input
+                  type="number"
+                  value={m.cost}
+                  onChange={e => updateMaterial(m.id, "cost", e.target.value)}
+                  placeholder="0,00"
+                  style={{ flex:1, padding:"9px 10px", border:"none", background:"transparent", fontSize:14, outline:"none" }}
+                />
+              </div>
+            </div>
+            <div style={{ display:"flex", alignItems: i === 0 ? "flex-end" : "flex-start", paddingBottom: i === 0 ? 0 : 0 }}>
+              {i === 0 && <div style={{ height:24, marginBottom:4 }} />}
+              <button
+                onClick={() => materials.length > 1 ? removeMaterial(m.id) : null}
+                disabled={materials.length === 1}
+                style={{
+                  background: materials.length === 1 ? "#f3f4f6" : "#fee2e2",
+                  color: materials.length === 1 ? "#d1d5db" : "#ef4444",
+                  border:"none", borderRadius:8,
+                  width:36, height:38,
+                  fontSize:16, cursor: materials.length === 1 ? "not-allowed" : "pointer",
+                  fontWeight:700
+                }}
+              >✕</button>
+            </div>
+          </div>
+        ))}
+
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:8 }}>
+          <button onClick={addMaterial} style={{
+            background:"#ede9fe", color:"#6366f1", border:"none",
+            borderRadius:10, padding:"8px 16px", fontWeight:700,
+            fontSize:14, cursor:"pointer"
+          }}>
+            ＋ Adicionar insumo
+          </button>
+          {materialTotal > 0 && (
+            <div style={{ fontWeight:700, color:"#6366f1", fontSize:15 }}>
+              Subtotal: <span style={{ color:"#1e293b" }}>{fmt(materialTotal)}</span>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* ── Seção 3: Embalagem & Logística */}
+      <Card>
+        {sectionTitle("📦", "Embalagem & Logística")}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <Inp
+            label="Custo da embalagem (R$)"
+            type="number"
+            value={packaging}
+            onChange={setPackaging}
+            prefix="R$"
+            placeholder="Ex: 1,50"
+            hint="Caixa, saquinho, papel, fita..."
+          />
+          <div>
+            <label style={{ display:"block", fontWeight:600, fontSize:14, marginBottom:5, color:"#374151" }}>
+              Frete / Postagem
+            </label>
+            <p style={{ fontSize:12, color:"#6b7280", marginBottom:4 }}>Valor fixo ou % do custo</p>
+            <div style={{ display:"flex", gap:6 }}>
+              <div style={{
+                display:"flex", alignItems:"center",
+                border:"1.5px solid #e5e7eb", borderRadius:10,
+                background:"#f9fafb", overflow:"hidden", flex:1
+              }}>
+                <span style={{
+                  padding:"0 8px", color:"#6b7280", fontSize:13,
+                  fontWeight:700, borderRight:"1.5px solid #e5e7eb",
+                  background:"#f3f4f6", alignSelf:"stretch",
+                  display:"flex", alignItems:"center"
+                }}>
+                  {shippingMode === "fixed" ? "R$" : "%"}
+                </span>
+                <input
+                  type="number"
+                  value={shipping}
+                  onChange={e => setShipping(e.target.value)}
+                  placeholder={shippingMode === "fixed" ? "12,00" : "10"}
+                  style={{ flex:1, padding:"9px 10px", border:"none", background:"transparent", fontSize:14, outline:"none" }}
+                />
+              </div>
+              <select
+                value={shippingMode}
+                onChange={e => setShippingMode(e.target.value)}
+                style={{
+                  padding:"9px 10px", border:"1.5px solid #e5e7eb",
+                  borderRadius:10, fontSize:13, background:"#f9fafb",
+                  fontWeight:700, cursor:"pointer", outline:"none"
+                }}
+              >
+                <option value="fixed">R$ fixo</option>
+                <option value="percent">% custo</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <Inp
+          label="Outros custos diretos (R$)"
+          type="number"
+          value={otherCosts}
+          onChange={setOtherCosts}
+          prefix="R$"
+          placeholder="Ex: taxas de marketplace, comissão..."
+          hint="Qualquer custo direto não listado acima"
+        />
+      </Card>
+
+      {/* ── Seção 4: Custos Fixos Rateados */}
+      <Card>
+        {sectionTitle("🏢", "Custos Fixos Rateados")}
+        <div style={{
+          background: monthlyFixed > 0 ? "#f0f4ff" : "#fffbeb",
+          border:`1.5px solid ${monthlyFixed > 0 ? "#c7d2fe" : "#fde68a"}`,
+          borderRadius:10, padding:"10px 14px", marginBottom:14
+        }}>
+          {monthlyFixed > 0 ? (
+            <span style={{ fontSize:14, color:"#4338ca", fontWeight:600 }}>
+              📊 Custos fixos detectados este mês: <strong>{fmt(monthlyFixed)}</strong>
+              <span style={{ color:"#6b7280", fontWeight:400 }}> (fixo + marketing + financeiro)</span>
+            </span>
+          ) : (
+            <span style={{ fontSize:13, color:"#92400e" }}>
+              ⚠️ Nenhum custo fixo cadastrado este mês. Vá em <strong>💸 Despesas</strong> para registrar.
+            </span>
+          )}
+        </div>
+
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+          <button
+            onClick={() => setUseFixedCosts(v => !v)}
+            style={{
+              width:44, height:24, borderRadius:12,
+              background: useFixedCosts ? "#6366f1" : "#d1d5db",
+              border:"none", cursor:"pointer", position:"relative",
+              transition:"background 0.2s"
+            }}
+          >
+            <span style={{
+              position:"absolute", top:2,
+              left: useFixedCosts ? 22 : 2,
+              width:20, height:20, borderRadius:10,
+              background:"#fff", transition:"left 0.2s",
+              boxShadow:"0 1px 4px rgba(0,0,0,.2)"
+            }} />
+          </button>
+          <span style={{ fontSize:14, fontWeight:600, color:"#374151" }}>
+            Ratear custos fixos neste produto
+          </span>
+        </div>
+
+        {useFixedCosts && (
+          <Inp
+            label="Unidades produzidas por mês"
+            type="number"
+            value={monthlyUnits}
+            onChange={setMonthlyUnits}
+            hint={`Rateio por unidade: ${fmt(fixedPerUnit)}`}
+            placeholder="Ex: 30"
+          />
+        )}
+      </Card>
+
+      {/* ── Seção 5: Mão de Obra */}
+      <Card>
+        {sectionTitle("👷", "Mão de Obra")}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <Inp
+            label="Horas trabalhadas"
+            type="number"
+            value={laborHours}
+            onChange={setLaborHours}
+            hint="Tempo para produzir 1 unidade"
+            placeholder="Ex: 2"
+          />
+          <Inp
+            label="Valor por hora (R$)"
+            type="number"
+            value={hourlyRate}
+            onChange={setHourlyRate}
+            prefix="R$"
+            hint={`Mão de obra total: ${fmt(laborTotal)}`}
+            placeholder="Ex: 15,00"
+          />
+        </div>
+      </Card>
+
+      {/* ── Seção 6: Margem & Impostos */}
+      <Card>
+        {sectionTitle("📊", "Margem & Impostos")}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div>
+            <label style={{ display:"block", fontWeight:600, fontSize:14, marginBottom:5, color:"#374151" }}>
+              Margem de lucro desejada
+            </label>
+            <p style={{ fontSize:12, color:"#6b7280", marginBottom:8 }}>
+              % sobre o preço de venda
+            </p>
+            <input
+              type="range" min="5" max="80" step="1"
+              value={margin}
+              onChange={e => setMargin(e.target.value)}
+              style={{ width:"100%", accentColor:"#6366f1" }}
+            />
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#9ca3af", marginTop:2 }}>
+              <span>5%</span>
+              <span style={{ fontWeight:800, color:"#6366f1", fontSize:15 }}>{margin}%</span>
+              <span>80%</span>
+            </div>
+          </div>
+          <Inp
+            label="Imposto / Taxa (%)"
+            type="number"
+            value={taxRate}
+            onChange={setTaxRate}
+            prefix="%"
+            hint="Ex: 6 para Simples Nacional, 0 se MEI isento"
+            placeholder="0"
+          />
+        </div>
+      </Card>
+
+      {/* ── RESULTADO ───────────────────────────────── */}
+      <div style={{
+        background:"linear-gradient(135deg,#1e293b,#334155)",
+        borderRadius:20, padding:24, color:"#fff", marginBottom:16
+      }}>
+        <div style={{ fontWeight:800, fontSize:18, marginBottom:20, display:"flex", alignItems:"center", gap:8 }}>
+          🎯 Resultado da Precificação
+        </div>
+
+        {/* Breakdown de custos */}
+        <div style={{ background:"rgba(255,255,255,.07)", borderRadius:14, padding:16, marginBottom:16 }}>
+          <div style={{ fontWeight:700, fontSize:13, color:"#94a3b8", marginBottom:10, textTransform:"uppercase", letterSpacing:1 }}>
+            Composição do Custo
+          </div>
+          {[
+            ["🪵 Matéria-prima",        materialTotal,  "#a78bfa"],
+            ["👷 Mão de obra",          laborTotal,     "#34d399"],
+            ["📦 Embalagem",            packagingVal,   "#fbbf24"],
+            ["🚚 Frete / Postagem",     shippingVal,    "#60a5fa"],
+            ["🏢 Rateio custos fixos",  fixedPerUnit,   "#f472b6"],
+            ["🔧 Outros diretos",       otherVal,       "#fb923c"],
+          ].filter(([,v]) => v > 0).map(([label, val, color]) => (
+            <div key={label} style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:14 }}>
+              <span style={{ color:"#cbd5e1" }}>{label}</span>
+              <span style={{ fontWeight:700, color }}>{fmt(val)}</span>
+            </div>
+          ))}
+          <div style={{ borderTop:"1px solid rgba(255,255,255,.15)", paddingTop:10, marginTop:6, display:"flex", justifyContent:"space-between", fontSize:16, fontWeight:800 }}>
+            <span>Custo total / unidade</span>
+            <span style={{ color:"#fbbf24" }}>{fmt(totalCost)}</span>
+          </div>
+        </div>
+
+        {/* Preço sugerido */}
+        <div style={{ textAlign:"center", marginBottom:20 }}>
+          <div style={{ fontSize:13, color:"#94a3b8", fontWeight:600, marginBottom:4 }}>PREÇO DE VENDA SUGERIDO</div>
+          <div style={{ fontSize:48, fontWeight:900, color:"#4ade80", lineHeight:1 }}>
+            {fmt(suggestedPrice)}
+          </div>
+          <div style={{ fontSize:13, color:"#94a3b8", marginTop:6 }}>
+            Margem: {marginPct}% · Imposto: {taxPct}% · Lucro por unid.: {fmt(suggestedPrice - totalCost)}
+          </div>
+        </div>
+
+        {/* Comparação com produto atual */}
+        {currentProduct && (
+          <div style={{
+            background: priceStatus === "ok" ? "rgba(74,222,128,.15)" : "rgba(251,191,36,.15)",
+            border:`1.5px solid ${priceStatus === "ok" ? "#4ade80" : "#fbbf24"}`,
+            borderRadius:12, padding:"12px 16px", marginBottom:16
+          }}>
+            <div style={{ fontWeight:700, fontSize:14, marginBottom:6, color: priceStatus === "ok" ? "#4ade80" : "#fbbf24" }}>
+              {priceStatus === "ok" ? "✅ Preço atual adequado" : "⚠️ Preço atual abaixo do mínimo!"}
+            </div>
+            <div style={{ display:"flex", gap:20, fontSize:13, color:"#cbd5e1" }}>
+              <span>Atual: <strong style={{ color:"#fff" }}>{fmt(currentPrice)}</strong></span>
+              <span>Sugerido: <strong style={{ color:"#4ade80" }}>{fmt(suggestedPrice)}</strong></span>
+              <span>Diferença: <strong style={{ color: currentPrice >= suggestedPrice ? "#4ade80" : "#f87171" }}>
+                {currentPrice >= suggestedPrice ? "+" : ""}{fmt(currentPrice - suggestedPrice)}
+              </strong></span>
+            </div>
+          </div>
+        )}
+
+        {/* Faixas de preço */}
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontWeight:700, fontSize:13, color:"#94a3b8", marginBottom:10, textTransform:"uppercase", letterSpacing:1 }}>
+            Faixas de Preço
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
             {[
-              ["🏢 Custos Fixos",    monthlyFixed,    "#6366f1"],
-              ["📦 Custos Variáveis", monthlyVariable, "#f59e0b"],
-              ["👷 Mão de Obra",     monthlyLabor,    "#10b981"],
-            ].map(([label, val, color]) => (
-              <div key={label} style={{ background:"#f9fafb", borderRadius:12, padding:"12px 14px", borderTop:`3px solid ${color}` }}>
-                <div style={{ fontSize:12, color:"#6b7280", fontWeight:600 }}>{label}</div>
-                <div style={{ fontSize:16, fontWeight:800, color, marginTop:4 }}>{fmt(val)}</div>
+              ["🔵 Mínimo",  priceMin,  "#60a5fa", "Cobre custos + margem básica"],
+              ["🟢 Ideal",   priceMid,  "#4ade80", "Recomendado (+15%)"],
+              ["⭐ Premium", priceMax,  "#fbbf24", "Posicionamento premium (+35%)"],
+            ].map(([label, val, color, desc]) => (
+              <div key={label} style={{ background:"rgba(255,255,255,.07)", borderRadius:12, padding:"12px 10px", textAlign:"center" }}>
+                <div style={{ fontSize:12, color:"#94a3b8", marginBottom:4 }}>{label}</div>
+                <div style={{ fontSize:18, fontWeight:800, color }}>{fmt(val)}</div>
+                <div style={{ fontSize:10, color:"#64748b", marginTop:4 }}>{desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Projeção mensal */}
+        {monthlyUnits && (
+          <div style={{ background:"rgba(255,255,255,.07)", borderRadius:14, padding:16, marginBottom:16 }}>
+            <div style={{ fontWeight:700, fontSize:13, color:"#94a3b8", marginBottom:10, textTransform:"uppercase", letterSpacing:1 }}>
+              Projeção Mensal — {units} unidades
+            </div>
+            {[
+              ["Receita projetada",   fmt(projRevenue), "#4ade80"],
+              ["(-) Custos totais",   fmt(projCost),    "#f87171"],
+              ["(=) Lucro projetado", fmt(projProfit),  projProfit >= 0 ? "#a78bfa" : "#f87171"],
+            ].map(([l, v, c]) => (
+              <div key={l} style={{ display:"flex", justifyContent:"space-between", marginBottom:6, fontSize:14 }}>
+                <span style={{ color:"#cbd5e1" }}>{l}</span>
+                <span style={{ fontWeight:800, color:c }}>{v}</span>
               </div>
             ))}
           </div>
         )}
-        <div style={{ marginTop:12, padding:"10px 14px", background:"#f0f4ff", borderRadius:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <span style={{ fontWeight:700, color:"#374151" }}>Total de custos mensais:</span>
-          <span style={{ fontWeight:800, fontSize:18, color:"#6366f1" }}>{fmt(totalMonthlyCost)}</span>
-        </div>
-      </Card>
 
-      {/* Parâmetros do cálculo */}
-      <Card>
-        <h3 style={{ margin:"0 0 12px", fontSize:15, fontWeight:700 }}>⚙️ Parâmetros</h3>
-
-        <Sel
-          label="Produto para comparar (opcional)"
-          value={selectedProduct}
-          onChange={setSelectedProduct}
-          hint="Compare o preço atual com o preço sugerido"
-          options={[
-            { value:"", label:"— Nenhum —" },
-            ...products.map(p => ({ value: p.id, label: `${p.cat === "Serviço" ? "🛠️" : "📦"} ${p.name} — ${fmt(p.price)}` })),
-          ]}
-        />
-
-        <Inp
-          label="Unidades vendidas por mês"
-          type="number"
-          value={monthlyUnits}
-          onChange={setMonthlyUnits}
-          hint="Quantas unidades você espera vender no mês"
-          placeholder="Ex: 10"
-        />
-
-        <Inp
-          label="Margem de lucro desejada (%)"
-          type="number"
-          value={desiredMargin}
-          onChange={setDesiredMargin}
-          hint="% de lucro sobre o preço de venda (ex: 30 = 30%)"
-          placeholder="Ex: 30"
-          prefix="%"
-        />
-
-        <Inp
-          label="Custo extra por unidade (R$)"
-          type="number"
-          value={extraCost}
-          onChange={setExtraCost}
-          hint="Custo adicional por unidade não incluído nas despesas (ex: embalagem)"
-          placeholder="0"
-          prefix="R$"
-        />
-      </Card>
-
-      {/* Resultado */}
-      <Card style={{ borderLeft:"4px solid #10b981" }}>
-        <h3 style={{ margin:"0 0 16px", fontSize:15, fontWeight:700 }}>📊 Resultado do Cálculo</h3>
-
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
-          <div style={{ background:"#f0fdf4", borderRadius:12, padding:16, textAlign:"center" }}>
-            <div style={{ fontSize:12, color:"#6b7280", fontWeight:600, marginBottom:4 }}>💰 Custo por unidade</div>
-            <div style={{ fontSize:22, fontWeight:800, color:"#374151" }}>{fmt(costPerUnit)}</div>
+        {/* Salvar no catálogo */}
+        <div style={{ borderTop:"1px solid rgba(255,255,255,.15)", paddingTop:16 }}>
+          <div style={{ fontWeight:700, fontSize:13, color:"#94a3b8", marginBottom:10 }}>
+            💾 Salvar no Catálogo de Produtos
           </div>
-          <div style={{ background:"#f0fdf4", borderRadius:12, padding:16, textAlign:"center" }}>
-            <div style={{ fontSize:12, color:"#6b7280", fontWeight:600, marginBottom:4 }}>🎯 Preço sugerido</div>
-            <div style={{ fontSize:22, fontWeight:800, color:"#10b981" }}>{fmt(suggestedPrice)}</div>
-          </div>
-        </div>
-
-        {/* Comparação com produto selecionado */}
-        {product && (
-          <div style={{
-            padding:"12px 16px", borderRadius:12, marginBottom:12,
-            background:
-              priceStatus === "above" ? "#f0fdf4" :
-              priceStatus === "below" ? "#fff7ed" : "#f0f4ff",
-            border: `1.5px solid ${
-              priceStatus === "above" ? "#bbf7d0" :
-              priceStatus === "below" ? "#fed7aa" : "#c7d2fe"
-            }`,
-          }}>
-            <div style={{ fontWeight:700, fontSize:14, marginBottom:4 }}>
-              {priceStatus === "above" && "✅ Preço atual acima do mínimo sugerido"}
-              {priceStatus === "below" && "⚠️ Preço atual abaixo do mínimo sugerido!"}
-              {priceStatus === "ok"    && "✅ Preço atual alinhado com o sugerido"}
+          {!showSave ? (
+            <button
+              onClick={() => setShowSave(true)}
+              style={{
+                background:"#6366f1", color:"#fff", border:"none",
+                borderRadius:10, padding:"10px 20px", fontWeight:700,
+                fontSize:14, cursor:"pointer", width:"100%"
+              }}
+            >
+              💾 Salvar como produto com preço calculado
+            </button>
+          ) : (
+            <div style={{ display:"flex", gap:8 }}>
+              <input
+                value={savedName}
+                onChange={e => setSavedName(e.target.value)}
+                placeholder="Nome do produto (ex: Vela de Soja 200g)"
+                style={{
+                  flex:1, padding:"10px 14px",
+                  border:"1.5px solid rgba(255,255,255,.2)",
+                  borderRadius:10, background:"rgba(255,255,255,.1)",
+                  color:"#fff", fontSize:14, outline:"none"
+                }}
+              />
+              <button
+                onClick={handleSave}
+                disabled={!savedName.trim()}
+                style={{
+                  background:"#4ade80", color:"#1e293b", border:"none",
+                  borderRadius:10, padding:"10px 18px", fontWeight:800,
+                  fontSize:14, cursor: savedName.trim() ? "pointer" : "not-allowed",
+                  opacity: savedName.trim() ? 1 : 0.5
+                }}
+              >
+                ✅ Confirmar
+              </button>
+              <button
+                onClick={() => setShowSave(false)}
+                style={{
+                  background:"rgba(255,255,255,.1)", color:"#fff", border:"none",
+                  borderRadius:10, padding:"10px 14px", fontWeight:700,
+                  fontSize:14, cursor:"pointer"
+                }}
+              >
+                ✕
+              </button>
             </div>
-            <div style={{ display:"flex", gap:16, fontSize:13, color:"#6b7280" }}>
-              <span>Atual: <strong style={{ color:"#374151" }}>{fmt(currentPrice)}</strong></span>
-              <span>Sugerido: <strong style={{ color:"#10b981" }}>{fmt(suggestedPrice)}</strong></span>
-              <span>Diferença: <strong style={{ color: priceDiff >= 0 ? "#10b981" : "#ef4444" }}>{priceDiff >= 0 ? "+" : ""}{fmt(priceDiff)}</strong></span>
-            </div>
-          </div>
-        )}
-
-        {/* Projeção mensal */}
-        <div style={{ background:"#f5f3ff", borderRadius:12, padding:"12px 16px" }}>
-          <div style={{ fontWeight:700, fontSize:14, marginBottom:8, color:"#6366f1" }}>📈 Projeção mensal ({units} unidades)</div>
-          <div style={{ display:"flex", justifyContent:"space-between", fontSize:14, marginBottom:4 }}>
-            <span style={{ color:"#6b7280" }}>Receita projetada:</span>
-            <span style={{ fontWeight:700, color:"#10b981" }}>{fmt(projectedRevenue)}</span>
-          </div>
-          <div style={{ display:"flex", justifyContent:"space-between", fontSize:14, marginBottom:4 }}>
-            <span style={{ color:"#6b7280" }}>Custos totais:</span>
-            <span style={{ fontWeight:700, color:"#ef4444" }}>{fmt(totalMonthlyCost + extra * units)}</span>
-          </div>
-          <div style={{ borderTop:"1px solid #ddd6fe", paddingTop:8, marginTop:4, display:"flex", justifyContent:"space-between", fontSize:15 }}>
-            <span style={{ fontWeight:700 }}>Lucro líquido projetado:</span>
-            <span style={{ fontWeight:800, color: projectedProfit >= 0 ? "#6366f1" : "#ef4444" }}>{fmt(projectedProfit)}</span>
-          </div>
+          )}
         </div>
-      </Card>
+      </div>
     </div>
   );
 }
+
 
 // ─────────────────────────────────────────────
 // Reports
