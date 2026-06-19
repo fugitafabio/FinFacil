@@ -1,31 +1,18 @@
 // ============================================================
-// App.jsx — FinFacil v2.0 | FASE 1: Segurança e Estabilidade
+// App.jsx — FinFacil v2.1 | FASE 2: Save Manual + Auto-save
 // ============================================================
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
   Legend, LineChart, Line
 } from "recharts";
 
-// ─────────────────────────────────────────────
-// 🔐 FASE 1 — FIX 1: Credenciais via variável de ambiente
-// Crie um arquivo .env na raiz do projeto com:
-//   REACT_APP_SHEET_ID=sua_sheet_id_aqui
-//   REACT_APP_API_KEY=sua_api_key_aqui
-//   REACT_APP_CLIENT_ID=seu_client_id_aqui
-// ⚠️  NUNCA commite o .env no Git (adicione ao .gitignore)
-// ─────────────────────────────────────────────
 const SHEET_ID  = process.env.REACT_APP_SHEET_ID;
 const API_KEY   = process.env.REACT_APP_API_KEY;
 const CLIENT_ID = process.env.REACT_APP_CLIENT_ID;
 
-// ─────────────────────────────────────────────
-// 🔐 FASE 1 — FIX 2: UUID nativo (sem colisão)
-// crypto.randomUUID() é suportado em todos os
-// browsers modernos (Chrome 92+, Firefox 95+, Safari 15.4+)
-// ─────────────────────────────────────────────
 const uid = () => crypto.randomUUID();
 
 const COLORS = [
@@ -44,15 +31,23 @@ const EXPENSE_CATS = [
 ];
 
 const MONTHS = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
-
-// ─────────────────────────────────────────────
-// 🔐 FASE 1 — FIX 3: Validação centralizada
-// Todas as regras de negócio num único lugar.
-// Retorna { valid: bool, errors: { campo: "mensagem" } }
-// ─────────────────────────────────────────────
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY  = new Date().toISOString().slice(0, 10);
 const MIN_DATE = "2000-01-01";
 
+// ─────────────────────────────────────────────
+// ✅ FASE 2 — Save Status Constants
+// ─────────────────────────────────────────────
+const SAVE_STATUS = {
+  IDLE:    "idle",
+  PENDING: "pending",   // há mudanças não salvas
+  SAVING:  "saving",
+  SAVED:   "saved",
+  ERROR:   "error",
+};
+
+// ─────────────────────────────────────────────
+// Validadores (inalterados)
+// ─────────────────────────────────────────────
 export const validators = {
   product: ({ name, price }) => {
     const errors = {};
@@ -130,24 +125,28 @@ export const validators = {
 };
 
 // ─────────────────────────────────────────────
-// Google Sheets helpers (inalterados)
+// Google Sheets helpers
 // ─────────────────────────────────────────────
 async function sheetsGet(token, range) {
   const r = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
+  if (!r.ok) throw new Error(`Erro ao ler planilha: ${r.status}`);
   const d = await r.json();
   return d.values || [];
 }
+
 async function sheetsClear(token, range) {
-  await fetch(
+  const r = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}:clear`,
     { method: "POST", headers: { Authorization: `Bearer ${token}` } }
   );
+  if (!r.ok) throw new Error(`Erro ao limpar planilha: ${r.status}`);
 }
+
 async function sheetsWrite(token, range, values) {
-  await fetch(
+  const r = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
     {
       method: "PUT",
@@ -155,10 +154,25 @@ async function sheetsWrite(token, range, values) {
       body: JSON.stringify({ values }),
     }
   );
+  if (!r.ok) throw new Error(`Erro ao escrever na planilha: ${r.status}`);
 }
 
 // ─────────────────────────────────────────────
-// Row parsers (inalterados — IDs agora são string UUID)
+// ✅ FASE 2 — Retry helper (tenta até 3x em erro de rede)
+// ─────────────────────────────────────────────
+async function withRetry(fn, retries = 3, delay = 1500) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i === retries - 1) throw e;
+      await new Promise(res => setTimeout(res, delay));
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// Row parsers
 // ─────────────────────────────────────────────
 function rowsToProducts(rows) {
   return rows.slice(1).map(r => ({
@@ -237,8 +251,8 @@ function Card({ children, style }) {
 }
 
 function Btn({ children, onClick, color = "blue", small, outline, danger, disabled }) {
-  const bg  = danger ? "#ef4444" : outline ? "transparent" : color === "green" ? "#10b981" : "#6366f1";
-  const fg  = outline ? (danger ? "#ef4444" : "#6366f1") : "#fff";
+  const bg = danger ? "#ef4444" : outline ? "transparent" : color === "green" ? "#10b981" : color === "orange" ? "#f59e0b" : "#6366f1";
+  const fg = outline ? (danger ? "#ef4444" : "#6366f1") : "#fff";
   return (
     <button onClick={onClick} disabled={disabled} style={{
       background: bg, color: fg,
@@ -248,15 +262,13 @@ function Btn({ children, onClick, color = "blue", small, outline, danger, disabl
       fontWeight: 700, fontSize: small ? 13 : 15,
       cursor: disabled ? "not-allowed" : "pointer",
       opacity: disabled ? 0.5 : 1,
+      transition: "opacity 0.2s, transform 0.1s",
     }}>
       {children}
     </button>
   );
 }
 
-// ─────────────────────────────────────────────
-// 🔐 FASE 1 — FIX 4: Inp com suporte a erro de validação
-// ─────────────────────────────────────────────
 function Inp({ label, type = "text", value, onChange, placeholder, hint, prefix, error }) {
   return (
     <div style={{ marginBottom: 14 }}>
@@ -299,9 +311,6 @@ function Inp({ label, type = "text", value, onChange, placeholder, hint, prefix,
   );
 }
 
-// ─────────────────────────────────────────────
-// 🔐 FASE 1 — FIX 5: Sel com suporte a erro de validação
-// ─────────────────────────────────────────────
 function Sel({ label, value, onChange, options, hint, error }) {
   return (
     <div style={{ marginBottom: 14 }}>
@@ -333,27 +342,236 @@ function Sel({ label, value, onChange, options, hint, error }) {
   );
 }
 
+// ─────────────────────────────────────────────
+// ✅ FASE 2 — SaveStatusBar: indicador visual de status
+// ─────────────────────────────────────────────
+function SaveStatusBar({ status, onSave, lastSavedAt }) {
+  const configs = {
+    [SAVE_STATUS.IDLE]:    { icon: "✅", text: "Sincronizado",         color: "#c4b5fd", btn: false },
+    [SAVE_STATUS.PENDING]: { icon: "🟡", text: "Alterações pendentes", color: "#fde68a", btn: true  },
+    [SAVE_STATUS.SAVING]:  { icon: "⏳", text: "Salvando...",          color: "#bfdbfe", btn: false },
+    [SAVE_STATUS.SAVED]:   { icon: "✅", text: "Salvo com sucesso!",   color: "#bbf7d0", btn: false },
+    [SAVE_STATUS.ERROR]:   { icon: "❌", text: "Erro ao salvar",       color: "#fecaca", btn: true  },
+  };
+
+  const cfg = configs[status] || configs[SAVE_STATUS.IDLE];
+
+  const formatTime = (date) => {
+    if (!date) return "";
+    return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {/* Indicador de texto */}
+      <div style={{
+        background: "rgba(255,255,255,0.15)",
+        borderRadius: 8,
+        padding: "4px 10px",
+        fontSize: 11,
+        color: "#fff",
+        fontWeight: 600,
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+      }}>
+        <span>{cfg.icon}</span>
+        <span>{cfg.text}</span>
+        {status === SAVE_STATUS.SAVED && lastSavedAt && (
+          <span style={{ opacity: 0.8 }}>· {formatTime(lastSavedAt)}</span>
+        )}
+      </div>
+
+      {/* Botão Salvar — aparece quando há pendências ou erro */}
+      {cfg.btn && (
+        <button
+          onClick={onSave}
+          disabled={status === SAVE_STATUS.SAVING}
+          style={{
+            background: status === SAVE_STATUS.ERROR ? "#ef4444" : "#fff",
+            color:      status === SAVE_STATUS.ERROR ? "#fff"    : "#6366f1",
+            border:     "none",
+            borderRadius: 8,
+            padding: "5px 12px",
+            fontWeight: 800,
+            fontSize: 12,
+            cursor: "pointer",
+            boxShadow: "0 1px 4px rgba(0,0,0,.2)",
+            transition: "transform 0.1s",
+          }}
+          onMouseOver={e => e.currentTarget.style.transform = "scale(1.05)"}
+          onMouseOut={e  => e.currentTarget.style.transform = "scale(1)"}
+        >
+          {status === SAVE_STATUS.ERROR ? "🔁 Tentar novamente" : "💾 Salvar agora"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 const fmt = v => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 // ─────────────────────────────────────────────
 // App Root
 // ─────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab]                    = useState("dashboard");
-  const [products, setProductsState]     = useState([]);
-  const [sales,    setSalesState]        = useState([]);
-  const [expenses, setExpensesState]     = useState([]);
-  const [period,   setPeriod]            = useState("month");
-  const [selMonth, setSelMonth]          = useState(new Date().getMonth() + 1);
-  const [selYear]                        = useState(new Date().getFullYear());
-  const [token,    setToken]             = useState(null);
-  const [authStatus, setAuthStatus]      = useState("loading");
-  const [saving,   setSaving]            = useState(false);
-  const [loadMsg,  setLoadMsg]           = useState("Carregando...");
+  const [tab, setTab]                = useState("dashboard");
+  const [products, setProductsState] = useState([]);
+  const [sales,    setSalesState]    = useState([]);
+  const [expenses, setExpensesState] = useState([]);
+  const [period,   setPeriod]        = useState("month");
+  const [selMonth, setSelMonth]      = useState(new Date().getMonth() + 1);
+  const [selYear]                    = useState(new Date().getFullYear());
+  const [token,    setToken]         = useState(null);
+  const [authStatus, setAuthStatus]  = useState("loading");
+  const [loadMsg,  setLoadMsg]       = useState("Carregando...");
 
   // ─────────────────────────────────────────────
-  // 🔐 FASE 1 — FIX 6: Verificação de variáveis de ambiente
-  // Atualizado para usar REACT_APP_* no aviso ao usuário
+  // ✅ FASE 2 — Estados de save
+  // ─────────────────────────────────────────────
+  const [saveStatus,  setSaveStatus]  = useState(SAVE_STATUS.IDLE);
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const [saveError,   setSaveError]   = useState("");
+
+  // Refs para auto-save (debounce)
+  const autoSaveTimer    = useRef(null);
+  const pendingDataRef   = useRef({ products: null, sales: null, expenses: null });
+  const tokenRef         = useRef(null);
+
+  // Mantém tokenRef sempre atualizado
+  useEffect(() => { tokenRef.current = token; }, [token]);
+
+  // ─────────────────────────────────────────────
+  // ✅ FASE 2 — Aviso ao fechar com dados pendentes
+  // ─────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e) => {
+      if (saveStatus === SAVE_STATUS.PENDING || saveStatus === SAVE_STATUS.SAVING) {
+        e.preventDefault();
+        e.returnValue = "Você tem alterações não salvas. Deseja sair mesmo assim?";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [saveStatus]);
+
+  // ─────────────────────────────────────────────
+  // ✅ FASE 2 — Função central de persistência
+  // ─────────────────────────────────────────────
+  const persistAll = useCallback(async (prods, sls, exps) => {
+    const tk = tokenRef.current;
+    if (!tk) return;
+
+    setSaveStatus(SAVE_STATUS.SAVING);
+    setSaveError("");
+
+    try {
+      await withRetry(async () => {
+        // Salva em paralelo quando possível
+        await Promise.all([
+          (async () => {
+            await sheetsClear(tk, "Produtos!A:E");
+            await sheetsWrite(tk, "Produtos!A1", [
+              ["id","nome","tipo","preco","descricao"],
+              ...prods.map(p => [p.id, p.name, p.cat, p.price, p.desc]),
+            ]);
+          })(),
+          (async () => {
+            await sheetsClear(tk, "Vendas!A:G");
+            await sheetsWrite(tk, "Vendas!A1", [
+              ["id","productId","qty","data","nota","mes","ano"],
+              ...sls.map(s => [s.id, s.productId, s.qty, s.date, s.note, s.month, s.year]),
+            ]);
+          })(),
+          (async () => {
+            await sheetsClear(tk, "Despesas!A:G");
+            await sheetsWrite(tk, "Despesas!A1", [
+              ["id","descricao","categoria","valor","data","mes","ano"],
+              ...exps.map(e => [e.id, e.desc, e.cat, e.value, e.date, e.month, e.year]),
+            ]);
+          })(),
+        ]);
+      });
+
+      setSaveStatus(SAVE_STATUS.SAVED);
+      setLastSavedAt(new Date());
+      pendingDataRef.current = { products: null, sales: null, expenses: null };
+
+      // Volta para IDLE após 3s
+      setTimeout(() => setSaveStatus(s => s === SAVE_STATUS.SAVED ? SAVE_STATUS.IDLE : s), 3000);
+
+    } catch (e) {
+      setSaveStatus(SAVE_STATUS.ERROR);
+      setSaveError(e.message || "Erro desconhecido ao salvar.");
+    }
+  }, []);
+
+  // ─────────────────────────────────────────────
+  // ✅ FASE 2 — Agenda auto-save com debounce de 3s
+  // ─────────────────────────────────────────────
+  const scheduleAutoSave = useCallback((prods, sls, exps) => {
+    // Armazena dados mais recentes para o save
+    pendingDataRef.current = { products: prods, sales: sls, expenses: exps };
+    setSaveStatus(SAVE_STATUS.PENDING);
+
+    // Cancela timer anterior e agenda novo
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => {
+      const { products: p, sales: s, expenses: e } = pendingDataRef.current;
+      if (p && s && e) persistAll(p, s, e);
+    }, 3000); // 3 segundos de debounce
+  }, [persistAll]);
+
+  // ─────────────────────────────────────────────
+  // ✅ FASE 2 — Salvar manualmente (botão)
+  // ─────────────────────────────────────────────
+  const handleManualSave = useCallback(() => {
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    const { products: p, sales: s, expenses: e } = pendingDataRef.current;
+    // Se há dados pendentes, salva; senão pega o estado atual via ref
+    persistAll(
+      p ?? products,
+      s ?? sales,
+      e ?? expenses
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistAll, products, sales, expenses]);
+
+  // Cleanup timer no unmount
+  useEffect(() => () => {
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+  }, []);
+
+  // ─────────────────────────────────────────────
+  // Setters que disparam o auto-save
+  // ─────────────────────────────────────────────
+  const setProducts = useCallback((fn) => {
+    setProductsState(prev => {
+      const next = typeof fn === "function" ? fn(prev) : fn;
+      // Precisa dos valores atuais de sales e expenses
+      setSalesState(s => { setExpensesState(ex => { scheduleAutoSave(next, s, ex); return ex; }); return s; });
+      return next;
+    });
+  }, [scheduleAutoSave]);
+
+  const setSales = useCallback((fn) => {
+    setSalesState(prev => {
+      const next = typeof fn === "function" ? fn(prev) : fn;
+      setProductsState(p => { setExpensesState(ex => { scheduleAutoSave(p, next, ex); return ex; }); return p; });
+      return next;
+    });
+  }, [scheduleAutoSave]);
+
+  const setExpenses = useCallback((fn) => {
+    setExpensesState(prev => {
+      const next = typeof fn === "function" ? fn(prev) : fn;
+      setProductsState(p => { setSalesState(s => { scheduleAutoSave(p, s, next); return s; }); return p; });
+      return next;
+    });
+  }, [scheduleAutoSave]);
+
+  // ─────────────────────────────────────────────
+  // Verificação de env vars
   // ─────────────────────────────────────────────
   useEffect(() => {
     if (!SHEET_ID || !API_KEY || !CLIENT_ID) {
@@ -386,9 +604,11 @@ export default function App() {
         sheetsGet(tk, "Despesas!A:G"),
       ]);
       setProductsState(pr.length > 1 ? rowsToProducts(pr) : []);
-      setSalesState(sr.length > 1 ? rowsToSales(sr) : []);
+      setSalesState(sr.length > 1    ? rowsToSales(sr)    : []);
       setExpensesState(er.length > 1 ? rowsToExpenses(er) : []);
       setLoadMsg("");
+      setSaveStatus(SAVE_STATUS.IDLE);
+      setLastSavedAt(new Date());
     } catch (e) {
       setLoadMsg("Erro ao carregar: " + e.message);
     }
@@ -448,66 +668,9 @@ export default function App() {
     tokenClient.requestAccessToken({ prompt: "select_account" });
   }, [loadAll]);
 
-  const saveProducts = useCallback(async (data) => {
-    if (!token) return;
-    setSaving(true);
-    try {
-      await sheetsClear(token, "Produtos!A:E");
-      await sheetsWrite(token, "Produtos!A1", [
-        ["id","nome","tipo","preco","descricao"],
-        ...data.map(p => [p.id, p.name, p.cat, p.price, p.desc]),
-      ]);
-    } finally { setSaving(false); }
-  }, [token]);
-
-  const saveSales = useCallback(async (data) => {
-    if (!token) return;
-    setSaving(true);
-    try {
-      await sheetsClear(token, "Vendas!A:G");
-      await sheetsWrite(token, "Vendas!A1", [
-        ["id","productId","qty","data","nota","mes","ano"],
-        ...data.map(s => [s.id, s.productId, s.qty, s.date, s.note, s.month, s.year]),
-      ]);
-    } finally { setSaving(false); }
-  }, [token]);
-
-  const saveExpenses = useCallback(async (data) => {
-    if (!token) return;
-    setSaving(true);
-    try {
-      await sheetsClear(token, "Despesas!A:G");
-      await sheetsWrite(token, "Despesas!A1", [
-        ["id","descricao","categoria","valor","data","mes","ano"],
-        ...data.map(e => [e.id, e.desc, e.cat, e.value, e.date, e.month, e.year]),
-      ]);
-    } finally { setSaving(false); }
-  }, [token]);
-
-  const setProducts = useCallback((fn) => {
-    setProductsState(prev => {
-      const next = typeof fn === "function" ? fn(prev) : fn;
-      saveProducts(next);
-      return next;
-    });
-  }, [saveProducts]);
-
-  const setSales = useCallback((fn) => {
-    setSalesState(prev => {
-      const next = typeof fn === "function" ? fn(prev) : fn;
-      saveSales(next);
-      return next;
-    });
-  }, [saveSales]);
-
-  const setExpenses = useCallback((fn) => {
-    setExpensesState(prev => {
-      const next = typeof fn === "function" ? fn(prev) : fn;
-      saveExpenses(next);
-      return next;
-    });
-  }, [saveExpenses]);
-
+  // ─────────────────────────────────────────────
+  // Filtros e cálculos (inalterados)
+  // ─────────────────────────────────────────────
   const filteredSales = useMemo(() => {
     if (period === "month")    return sales.filter(s => s.month === selMonth && s.year === selYear);
     if (period === "quarter")  { const q = Math.ceil(selMonth / 3); return sales.filter(s => Math.ceil(s.month / 3) === q && s.year === selYear); }
@@ -575,6 +738,7 @@ export default function App() {
   // ─── App principal ───
   return (
     <div style={{ minHeight:"100vh", background:"#f0f4ff", fontFamily:"'Segoe UI',sans-serif" }}>
+
       {/* Header */}
       <div style={{
         background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
@@ -584,10 +748,14 @@ export default function App() {
       }}>
         <div>
           <div style={{ color:"#fff", fontWeight:800, fontSize:20 }}>💼 FinFacil</div>
-          <div style={{ color:"#c4b5fd", fontSize:11 }}>
-            {saving ? "💾 Salvando..." : "✅ Sincronizado com Google Sheets"}
-          </div>
+          {/* ✅ FASE 2 — SaveStatusBar no header */}
+          <SaveStatusBar
+            status={saveStatus}
+            onSave={handleManualSave}
+            lastSavedAt={lastSavedAt}
+          />
         </div>
+
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
           <select
             value={period}
@@ -611,7 +779,24 @@ export default function App() {
         </div>
       </div>
 
-      {loadMsg && (
+      {/* ✅ FASE 2 — Banner de erro de save (quando ocorre) */}
+      {saveStatus === SAVE_STATUS.ERROR && saveError && (
+        <div style={{
+          background:"#fee2e2", padding:"10px 20px", fontSize:13,
+          color:"#991b1b", textAlign:"center", fontWeight:600,
+          display:"flex", justifyContent:"center", alignItems:"center", gap:12,
+        }}>
+          ❌ {saveError}
+          <button
+            onClick={handleManualSave}
+            style={{ background:"#ef4444", color:"#fff", border:"none", borderRadius:8, padding:"4px 12px", fontWeight:700, cursor:"pointer", fontSize:13 }}
+          >
+            🔁 Tentar novamente
+          </button>
+        </div>
+      )}
+
+      {loadMsg && saveStatus !== SAVE_STATUS.ERROR && (
         <div style={{ background:"#fef3c7", padding:"10px 20px", fontSize:13, color:"#92400e", textAlign:"center" }}>
           {loadMsg}
         </div>
@@ -670,7 +855,7 @@ export default function App() {
 }
 
 // ─────────────────────────────────────────────
-// Dashboard
+// Dashboard (inalterado)
 // ─────────────────────────────────────────────
 function Dashboard({ products, filteredSales, filteredExpenses, totalRevenue, totalExpense, profit, margin, fmt, sales, expenses, selYear }) {
   const health      = profit > 0 && margin > 15 ? "green" : profit > 0 ? "yellow" : "red";
@@ -770,7 +955,7 @@ function Dashboard({ products, filteredSales, filteredExpenses, totalRevenue, to
 }
 
 // ─────────────────────────────────────────────
-// 🔐 FASE 1 — Products com validação completa
+// Products (inalterado — usa setProducts novo)
 // ─────────────────────────────────────────────
 function Products({ products, setProducts, fmt, sales }) {
   const emptyForm = { name:"", cat:"Produto", price:"", desc:"" };
@@ -788,7 +973,6 @@ function Products({ products, setProducts, fmt, sales }) {
     const { valid, errors: errs } = validators.product(form);
     if (!valid) { setErrors(errs); return; }
     setErrors({});
-
     if (editing) {
       setProducts(p => p.map(x => x.id === editing ? { ...x, ...form, price: parseFloat(form.price) } : x));
       setEditing(null);
@@ -807,40 +991,17 @@ function Products({ products, setProducts, fmt, sales }) {
         <h3 style={{ margin:"0 0 12px", fontSize:16, fontWeight:700 }}>
           {editing ? "✏️ Editar" : "➕ Novo produto/serviço"}
         </h3>
-        <Inp
-          label="Nome" value={form.name} error={errors.name}
-          onChange={v => setForm({ ...form, name: v })}
-          placeholder="Ex: Consultoria, Produto X"
-        />
-        <Sel
-          label="Tipo" value={form.cat}
-          onChange={v => setForm({ ...form, cat: v })}
-          options={[
-            { value:"Produto", label:"📦 Produto" },
-            { value:"Serviço", label:"🛠️ Serviço" },
-          ]}
-        />
-        <Inp
-          label="Preço (R$)" type="number" value={form.price} error={errors.price}
-          onChange={v => setForm({ ...form, price: v })}
-          prefix="R$" hint="Valor unitário de venda"
-        />
-        <Inp
-          label="Descrição (opcional)" value={form.desc}
-          onChange={v => setForm({ ...form, desc: v })}
-          placeholder="Breve descrição"
-        />
+        <Inp label="Nome" value={form.name} error={errors.name} onChange={v => setForm({ ...form, name: v })} placeholder="Ex: Consultoria, Produto X" />
+        <Sel label="Tipo" value={form.cat} onChange={v => setForm({ ...form, cat: v })} options={[{ value:"Produto", label:"📦 Produto" },{ value:"Serviço", label:"🛠️ Serviço" }]} />
+        <Inp label="Preço (R$)" type="number" value={form.price} error={errors.price} onChange={v => setForm({ ...form, price: v })} prefix="R$" hint="Valor unitário de venda" />
+        <Inp label="Descrição (opcional)" value={form.desc} onChange={v => setForm({ ...form, desc: v })} placeholder="Breve descrição" />
         <div style={{ display:"flex", gap:8 }}>
           <Btn onClick={save} color="green">{editing ? "💾 Salvar" : "➕ Adicionar"}</Btn>
           {editing && <Btn outline onClick={cancel}>Cancelar</Btn>}
         </div>
       </Card>
 
-      {products.length === 0 && (
-        <div style={{ textAlign:"center", padding:40, color:"#9ca3af" }}>
-          Nenhum produto ainda. Adicione acima! ☝️
-        </div>
-      )}
+      {products.length === 0 && <div style={{ textAlign:"center", padding:40, color:"#9ca3af" }}>Nenhum produto ainda. Adicione acima! ☝️</div>}
 
       {products.map(p => (
         <Card key={p.id} style={{ borderLeft:`4px solid ${p.id === topId ? "#f59e0b" : "#e5e7eb"}` }}>
@@ -870,7 +1031,7 @@ function Products({ products, setProducts, fmt, sales }) {
 }
 
 // ─────────────────────────────────────────────
-// 🔐 FASE 1 — Sales com validação completa
+// Sales (inalterado — usa setSales novo)
 // ─────────────────────────────────────────────
 function Sales({ sales, setSales, products, filteredSales, fmt, selMonth, selYear }) {
   const emptyForm = { productId:"", qty:"1", date: TODAY, note:"" };
@@ -890,16 +1051,8 @@ function Sales({ sales, setSales, products, filteredSales, fmt, selMonth, selYea
     const { valid, errors: errs } = validators.sale(form);
     if (!valid) { setErrors(errs); return; }
     setErrors({});
-
     const d     = new Date(form.date);
-    const entry = {
-      productId: form.productId,
-      qty:       Number(form.qty),
-      date:      form.date,
-      note:      form.note,
-      month:     d.getMonth() + 1,
-      year:      d.getFullYear(),
-    };
+    const entry = { productId: form.productId, qty: Number(form.qty), date: form.date, note: form.note, month: d.getMonth() + 1, year: d.getFullYear() };
     if (editing) {
       setSales(ss => ss.map(s => s.id === editing ? { ...s, ...entry } : s));
       setEditing(null);
@@ -922,50 +1075,23 @@ function Sales({ sales, setSales, products, filteredSales, fmt, selMonth, selYea
       </div>
 
       <Card>
-        <h3 style={{ margin:"0 0 12px", fontSize:16, fontWeight:700 }}>
-          {editing ? "✏️ Editar" : "➕ Registrar venda"}
-        </h3>
-        <Sel
-          label="Produto/Serviço" value={form.productId} error={errors.productId}
-          onChange={v => setForm({ ...form, productId: v })}
-          hint="Selecione o que foi vendido"
-          options={[
-            { value:"", label:"— Selecione —" },
-            ...products.map(p => ({
-              value: p.id,
-              label: `${p.cat==="Serviço"?"🛠️":"📦"} ${p.name} — ${fmt(p.price)}`,
-            })),
-          ]}
-        />
-        <Inp
-          label="Quantidade" type="number" value={form.qty} error={errors.qty}
-          onChange={v => setForm({ ...form, qty: v })} placeholder="1"
-        />
+        <h3 style={{ margin:"0 0 12px", fontSize:16, fontWeight:700 }}>{editing ? "✏️ Editar" : "➕ Registrar venda"}</h3>
+        <Sel label="Produto/Serviço" value={form.productId} error={errors.productId} onChange={v => setForm({ ...form, productId: v })} hint="Selecione o que foi vendido" options={[{ value:"", label:"— Selecione —" }, ...products.map(p => ({ value: p.id, label: `${p.cat==="Serviço"?"🛠️":"📦"} ${p.name} — ${fmt(p.price)}` }))]} />
+        <Inp label="Quantidade" type="number" value={form.qty} error={errors.qty} onChange={v => setForm({ ...form, qty: v })} placeholder="1" />
         {selProd && (
           <div style={{ background:"#f0fdf4", border:"1.5px solid #bbf7d0", borderRadius:10, padding:"10px 14px", marginBottom:14, fontWeight:700, color:"#15803d" }}>
             💵 Subtotal: {fmt(subtotal)}
           </div>
         )}
-        <Inp
-          label="Data" type="date" value={form.date} error={errors.date}
-          onChange={v => setForm({ ...form, date: v })}
-        />
-        <Inp
-          label="Observação" value={form.note}
-          onChange={v => setForm({ ...form, note: v })}
-          placeholder="Ex: Pagamento via Pix"
-        />
+        <Inp label="Data" type="date" value={form.date} error={errors.date} onChange={v => setForm({ ...form, date: v })} />
+        <Inp label="Observação" value={form.note} onChange={v => setForm({ ...form, note: v })} placeholder="Ex: Pagamento via Pix" />
         <div style={{ display:"flex", gap:8 }}>
           <Btn onClick={save} color="green">{editing ? "💾 Salvar" : "➕ Registrar"}</Btn>
           {editing && <Btn outline onClick={cancel}>Cancelar</Btn>}
         </div>
       </Card>
 
-      {filteredSales.length === 0 && (
-        <div style={{ textAlign:"center", padding:40, color:"#9ca3af" }}>
-          Nenhuma venda neste período.
-        </div>
-      )}
+      {filteredSales.length === 0 && <div style={{ textAlign:"center", padding:40, color:"#9ca3af" }}>Nenhuma venda neste período.</div>}
 
       {filteredSales.slice().reverse().map(s => {
         const p   = products.find(x => x.id === s.productId);
@@ -975,9 +1101,7 @@ function Sales({ sales, setSales, products, filteredSales, fmt, selMonth, selYea
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
               <div>
                 <div style={{ fontWeight:700, fontSize:16 }}>{p ? p.name : "Produto removido"}</div>
-                <div style={{ color:"#6b7280", fontSize:13 }}>
-                  {s.qty}x {p ? fmt(p.price) : "—"} · {new Date(s.date + "T12:00:00").toLocaleDateString("pt-BR")}
-                </div>
+                <div style={{ color:"#6b7280", fontSize:13 }}>{s.qty}x {p ? fmt(p.price) : "—"} · {new Date(s.date + "T12:00:00").toLocaleDateString("pt-BR")}</div>
                 {s.note && <div style={{ fontSize:12, color:"#9ca3af" }}>💬 {s.note}</div>}
               </div>
               <div style={{ textAlign:"right" }}>
@@ -1003,7 +1127,7 @@ function Sales({ sales, setSales, products, filteredSales, fmt, selMonth, selYea
 }
 
 // ─────────────────────────────────────────────
-// 🔐 FASE 1 — Expenses com validação completa
+// Expenses (inalterado — usa setExpenses novo)
 // ─────────────────────────────────────────────
 function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
   const emptyForm = { desc:"", cat:"fixo", value:"", date: TODAY };
@@ -1020,16 +1144,8 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
     const { valid, errors: errs } = validators.expense(form);
     if (!valid) { setErrors(errs); return; }
     setErrors({});
-
     const d     = new Date(form.date);
-    const entry = {
-      desc:  form.desc.trim(),
-      cat:   form.cat,
-      value: parseFloat(form.value),
-      date:  form.date,
-      month: d.getMonth() + 1,
-      year:  d.getFullYear(),
-    };
+    const entry = { desc: form.desc.trim(), cat: form.cat, value: parseFloat(form.value), date: form.date, month: d.getMonth() + 1, year: d.getFullYear() };
     if (editing) {
       setExpenses(es => es.map(e => e.id === editing ? { ...e, ...entry } : e));
       setEditing(null);
@@ -1052,30 +1168,11 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
       </div>
 
       <Card>
-        <h3 style={{ margin:"0 0 12px", fontSize:16, fontWeight:700 }}>
-          {editing ? "✏️ Editar" : "➕ Nova despesa"}
-        </h3>
-        <Inp
-          label="Descrição" value={form.desc} error={errors.desc}
-          onChange={v => setForm({ ...form, desc: v })}
-          placeholder="Ex: Aluguel, Google Ads..."
-          hint="O que é esse gasto?"
-        />
-        <Sel
-          label="Categoria" value={form.cat}
-          onChange={v => setForm({ ...form, cat: v })}
-          hint="Classifique para relatórios"
-          options={EXPENSE_CATS.map(c => ({ value: c.id, label: `${c.icon} ${c.label} — ${c.desc}` }))}
-        />
-        <Inp
-          label="Valor (R$)" type="number" value={form.value} error={errors.value}
-          onChange={v => setForm({ ...form, value: v })}
-          prefix="R$"
-        />
-        <Inp
-          label="Data" type="date" value={form.date} error={errors.date}
-          onChange={v => setForm({ ...form, date: v })}
-        />
+        <h3 style={{ margin:"0 0 12px", fontSize:16, fontWeight:700 }}>{editing ? "✏️ Editar" : "➕ Nova despesa"}</h3>
+        <Inp label="Descrição" value={form.desc} error={errors.desc} onChange={v => setForm({ ...form, desc: v })} placeholder="Ex: Aluguel, Google Ads..." hint="O que é esse gasto?" />
+        <Sel label="Categoria" value={form.cat} onChange={v => setForm({ ...form, cat: v })} hint="Classifique para relatórios" options={EXPENSE_CATS.map(c => ({ value: c.id, label: `${c.icon} ${c.label} — ${c.desc}` }))} />
+        <Inp label="Valor (R$)" type="number" value={form.value} error={errors.value} onChange={v => setForm({ ...form, value: v })} prefix="R$" />
+        <Inp label="Data" type="date" value={form.date} error={errors.date} onChange={v => setForm({ ...form, date: v })} />
         <div style={{ display:"flex", gap:8 }}>
           <Btn onClick={save} color="purple">{editing ? "💾 Salvar" : "➕ Adicionar"}</Btn>
           {editing && <Btn outline onClick={cancel}>Cancelar</Btn>}
@@ -1084,22 +1181,13 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
 
       <div style={{ display:"flex", gap:8, overflowX:"auto", marginBottom:16, paddingBottom:4 }}>
         {[{ id:"all", label:"Todas", icon:"" }, ...EXPENSE_CATS].map(c => (
-          <button key={c.id} onClick={() => setFilterCat(c.id)} style={{
-            padding:"6px 14px", borderRadius:99, border:"none",
-            background: filterCat === c.id ? "#6366f1" : "#e5e7eb",
-            color:      filterCat === c.id ? "#fff"    : "#374151",
-            fontWeight:700, fontSize:13, cursor:"pointer", whiteSpace:"nowrap",
-          }}>
+          <button key={c.id} onClick={() => setFilterCat(c.id)} style={{ padding:"6px 14px", borderRadius:99, border:"none", background: filterCat === c.id ? "#6366f1" : "#e5e7eb", color: filterCat === c.id ? "#fff" : "#374151", fontWeight:700, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" }}>
             {c.icon} {c.label || "Todas"}
           </button>
         ))}
       </div>
 
-      {visible.length === 0 && (
-        <div style={{ textAlign:"center", padding:40, color:"#9ca3af" }}>
-          Nenhuma despesa neste período.
-        </div>
-      )}
+      {visible.length === 0 && <div style={{ textAlign:"center", padding:40, color:"#9ca3af" }}>Nenhuma despesa neste período.</div>}
 
       {visible.slice().reverse().map(e => {
         const cat = EXPENSE_CATS.find(c => c.id === e.cat);
@@ -1108,9 +1196,7 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
               <div>
                 <div style={{ fontWeight:700, fontSize:16 }}>{e.desc}</div>
-                <div style={{ fontSize:13, color:"#6b7280" }}>
-                  {cat?.icon} {cat?.label} · {new Date(e.date + "T12:00:00").toLocaleDateString("pt-BR")}
-                </div>
+                <div style={{ fontSize:13, color:"#6b7280" }}>{cat?.icon} {cat?.label} · {new Date(e.date + "T12:00:00").toLocaleDateString("pt-BR")}</div>
               </div>
               <div style={{ textAlign:"right" }}>
                 <div style={{ fontWeight:800, fontSize:18, color:"#ef4444" }}>{fmt(e.value)}</div>
@@ -1135,7 +1221,7 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
 }
 
 // ─────────────────────────────────────────────
-// Reports
+// Reports (inalterado)
 // ─────────────────────────────────────────────
 function Reports({ products, sales, expenses, fmt, selYear }) {
   const monthlyData = MONTHS.map((name, i) => {
@@ -1170,21 +1256,14 @@ function Reports({ products, sales, expenses, fmt, selYear }) {
   return (
     <div>
       <h2 style={{ fontSize:22, fontWeight:800, marginBottom:16 }}>📈 Relatórios — {selYear}</h2>
-
       <Card>
         <h3 style={{ margin:"0 0 12px", fontSize:16, fontWeight:700 }}>📋 DRE Simplificada</h3>
         {[
-          ["(+) Receita Bruta",       totalRev,    "#10b981"],
-          ["(-) Total Despesas",      -totalExp,   "#ef4444"],
-          ["(=) Resultado Líquido",   totalProfit, totalProfit >= 0 ? "#6366f1" : "#ef4444"],
+          ["(+) Receita Bruta",     totalRev,    "#10b981"],
+          ["(-) Total Despesas",    -totalExp,   "#ef4444"],
+          ["(=) Resultado Líquido", totalProfit, totalProfit >= 0 ? "#6366f1" : "#ef4444"],
         ].map(([l, v, c], i) => (
-          <div key={i} style={{
-            display:"flex", justifyContent:"space-between",
-            padding:"10px 14px",
-            background: i === 2 ? "#f5f3ff" : "#f9fafb",
-            borderRadius:10, fontWeight: i === 2 ? 800 : 600,
-            fontSize: i === 2 ? 17 : 15, marginBottom:6,
-          }}>
+          <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"10px 14px", background: i === 2 ? "#f5f3ff" : "#f9fafb", borderRadius:10, fontWeight: i === 2 ? 800 : 600, fontSize: i === 2 ? 17 : 15, marginBottom:6 }}>
             <span>{l}</span>
             <span style={{ color:c }}>{fmt(Math.abs(v))}</span>
           </div>
@@ -1202,9 +1281,7 @@ function Reports({ products, sales, expenses, fmt, selYear }) {
         {ranking.length === 0 && <p style={{ color:"#9ca3af" }}>Sem dados.</p>}
         {ranking.map((r, i) => (
           <div key={r.name} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 0", borderBottom:"1px solid #f3f4f6" }}>
-            <span style={{ fontSize:20, width:30, textAlign:"center" }}>
-              {i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`}
-            </span>
+            <span style={{ fontSize:20, width:30, textAlign:"center" }}>{i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`}</span>
             <div style={{ flex:1 }}>
               <div style={{ fontWeight:700 }}>{r.name}</div>
               <div style={{ fontSize:13, color:"#6b7280" }}>{r.qty} vendidos</div>
@@ -1223,10 +1300,7 @@ function Reports({ products, sales, expenses, fmt, selYear }) {
               <span style={{ fontWeight:700, color:"#ef4444" }}>{fmt(c.value)}</span>
             </div>
             <div style={{ background:"#f3f4f6", borderRadius:99, height:8 }}>
-              <div style={{
-                background: COLORS[i % COLORS.length], borderRadius:99, height:8,
-                width: `${Math.min(100, (c.value / expByCat.reduce((s, x) => s + x.value, 0)) * 100)}%`,
-              }} />
+              <div style={{ background: COLORS[i % COLORS.length], borderRadius:99, height:8, width: `${Math.min(100, (c.value / expByCat.reduce((s, x) => s + x.value, 0)) * 100)}%` }} />
             </div>
           </div>
         ))}
