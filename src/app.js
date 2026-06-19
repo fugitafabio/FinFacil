@@ -534,7 +534,6 @@ export default function App() {
       s ?? sales,
       e ?? expenses
     );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persistAll, products, sales, expenses]);
 
   // Cleanup timer no unmount
