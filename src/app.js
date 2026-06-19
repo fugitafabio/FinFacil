@@ -12,14 +12,14 @@ import {
 // ─────────────────────────────────────────────
 // 🔐 FASE 1 — FIX 1: Credenciais via variável de ambiente
 // Crie um arquivo .env na raiz do projeto com:
-//   VITE_SHEET_ID=sua_sheet_id_aqui
-//   VITE_API_KEY=sua_api_key_aqui
-//   VITE_CLIENT_ID=seu_client_id_aqui
+//   REACT_APP_SHEET_ID=sua_sheet_id_aqui
+//   REACT_APP_API_KEY=sua_api_key_aqui
+//   REACT_APP_CLIENT_ID=seu_client_id_aqui
 // ⚠️  NUNCA commite o .env no Git (adicione ao .gitignore)
 // ─────────────────────────────────────────────
-const SHEET_ID  = import.meta.env.VITE_SHEET_ID;
-const API_KEY   = import.meta.env.VITE_API_KEY;
-const CLIENT_ID = import.meta.env.VITE_CLIENT_ID;
+const SHEET_ID  = process.env.REACT_APP_SHEET_ID;
+const API_KEY   = process.env.REACT_APP_API_KEY;
+const CLIENT_ID = process.env.REACT_APP_CLIENT_ID;
 
 // ─────────────────────────────────────────────
 // 🔐 FASE 1 — FIX 2: UUID nativo (sem colisão)
@@ -172,7 +172,7 @@ function rowsToProducts(rows) {
 function rowsToSales(rows) {
   return rows.slice(1).map(r => ({
     id:        r[0] || "",
-    productId: r[1] || "",   // agora string UUID
+    productId: r[1] || "",
     qty:       Number(r[2]),
     date:      r[3] || "",
     note:      r[4] || "",
@@ -256,7 +256,6 @@ function Btn({ children, onClick, color = "blue", small, outline, danger, disabl
 
 // ─────────────────────────────────────────────
 // 🔐 FASE 1 — FIX 4: Inp com suporte a erro de validação
-// Exibe borda vermelha + mensagem quando `error` é passado
 // ─────────────────────────────────────────────
 function Inp({ label, type = "text", value, onChange, placeholder, hint, prefix, error }) {
   return (
@@ -291,7 +290,6 @@ function Inp({ label, type = "text", value, onChange, placeholder, hint, prefix,
           style={{ flex: 1, padding: "10px 14px", border: "none", background: "transparent", fontSize: 15, outline: "none" }}
         />
       </div>
-      {/* Mensagem de erro inline */}
       {error && (
         <p style={{ fontSize: 12, color: "#ef4444", marginTop: 4, fontWeight: 600 }}>
           ⚠️ {error}
@@ -341,28 +339,28 @@ const fmt = v => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" 
 // App Root
 // ─────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab]           = useState("dashboard");
-  const [products, setProductsState]   = useState([]);
-  const [sales,    setSalesState]      = useState([]);
-  const [expenses, setExpensesState]   = useState([]);
-  const [period,   setPeriod]   = useState("month");
-  const [selMonth, setSelMonth] = useState(new Date().getMonth() + 1);
-  const [selYear]               = useState(new Date().getFullYear());
-  const [token,    setToken]    = useState(null);
-  const [authStatus, setAuthStatus] = useState("loading");
-  const [saving,   setSaving]   = useState(false);
-  const [loadMsg,  setLoadMsg]  = useState("Carregando...");
+  const [tab, setTab]                    = useState("dashboard");
+  const [products, setProductsState]     = useState([]);
+  const [sales,    setSalesState]        = useState([]);
+  const [expenses, setExpensesState]     = useState([]);
+  const [period,   setPeriod]            = useState("month");
+  const [selMonth, setSelMonth]          = useState(new Date().getMonth() + 1);
+  const [selYear]                        = useState(new Date().getFullYear());
+  const [token,    setToken]             = useState(null);
+  const [authStatus, setAuthStatus]      = useState("loading");
+  const [saving,   setSaving]            = useState(false);
+  const [loadMsg,  setLoadMsg]           = useState("Carregando...");
 
   // ─────────────────────────────────────────────
   // 🔐 FASE 1 — FIX 6: Verificação de variáveis de ambiente
-  // Exibe aviso claro se .env não foi configurado
+  // Atualizado para usar REACT_APP_* no aviso ao usuário
   // ─────────────────────────────────────────────
   useEffect(() => {
     if (!SHEET_ID || !API_KEY || !CLIENT_ID) {
       setAuthStatus("error");
       setLoadMsg(
         "⚠️ Variáveis de ambiente não configuradas. " +
-        "Crie o arquivo .env com VITE_SHEET_ID, VITE_API_KEY e VITE_CLIENT_ID."
+        "Crie o arquivo .env com REACT_APP_SHEET_ID, REACT_APP_API_KEY e REACT_APP_CLIENT_ID."
       );
     }
   }, []);
@@ -397,7 +395,7 @@ export default function App() {
   }, [ensureHeaders]);
 
   useEffect(() => {
-    if (!SHEET_ID || !API_KEY || !CLIENT_ID) return; // já tratado acima
+    if (!SHEET_ID || !API_KEY || !CLIENT_ID) return;
     const interval = setInterval(() => {
       if (window.gapi && window.google) {
         clearInterval(interval);
@@ -450,7 +448,6 @@ export default function App() {
     tokenClient.requestAccessToken({ prompt: "select_account" });
   }, [loadAll]);
 
-  // Save helpers (inalterados)
   const saveProducts = useCallback(async (data) => {
     if (!token) return;
     setSaving(true);
@@ -511,7 +508,6 @@ export default function App() {
     });
   }, [saveExpenses]);
 
-  // Filtros de período
   const filteredSales = useMemo(() => {
     if (period === "month")    return sales.filter(s => s.month === selMonth && s.year === selYear);
     if (period === "quarter")  { const q = Math.ceil(selMonth / 3); return sales.filter(s => Math.ceil(s.month / 3) === q && s.year === selYear); }
@@ -674,7 +670,7 @@ export default function App() {
 }
 
 // ─────────────────────────────────────────────
-// Dashboard (inalterado funcionalmente)
+// Dashboard
 // ─────────────────────────────────────────────
 function Dashboard({ products, filteredSales, filteredExpenses, totalRevenue, totalExpense, profit, margin, fmt, sales, expenses, selYear }) {
   const health      = profit > 0 && margin > 15 ? "green" : profit > 0 ? "yellow" : "red";
@@ -779,7 +775,7 @@ function Dashboard({ products, filteredSales, filteredExpenses, totalRevenue, to
 function Products({ products, setProducts, fmt, sales }) {
   const emptyForm = { name:"", cat:"Produto", price:"", desc:"" };
   const [form,    setForm]    = useState(emptyForm);
-  const [errors,  setErrors]  = useState({});       // ← erros por campo
+  const [errors,  setErrors]  = useState({});
   const [editing, setEditing] = useState(null);
   const [confirm, setConfirm] = useState(null);
 
@@ -789,7 +785,6 @@ function Products({ products, setProducts, fmt, sales }) {
     : null;
 
   const save = () => {
-    // ── Valida antes de salvar ──
     const { valid, errors: errs } = validators.product(form);
     if (!valid) { setErrors(errs); return; }
     setErrors({});
@@ -1087,7 +1082,6 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
         </div>
       </Card>
 
-      {/* Filtros por categoria */}
       <div style={{ display:"flex", gap:8, overflowX:"auto", marginBottom:16, paddingBottom:4 }}>
         {[{ id:"all", label:"Todas", icon:"" }, ...EXPENSE_CATS].map(c => (
           <button key={c.id} onClick={() => setFilterCat(c.id)} style={{
@@ -1141,7 +1135,7 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
 }
 
 // ─────────────────────────────────────────────
-// Reports (inalterado)
+// Reports
 // ─────────────────────────────────────────────
 function Reports({ products, sales, expenses, fmt, selYear }) {
   const monthlyData = MONTHS.map((name, i) => {
