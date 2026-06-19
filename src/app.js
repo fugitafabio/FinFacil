@@ -39,14 +39,14 @@ const MIN_DATE = "2000-01-01";
 // ─────────────────────────────────────────────
 const SAVE_STATUS = {
   IDLE:    "idle",
-  PENDING: "pending",   // há mudanças não salvas
+  PENDING: "pending",
   SAVING:  "saving",
   SAVED:   "saved",
   ERROR:   "error",
 };
 
 // ─────────────────────────────────────────────
-// Validadores (inalterados)
+// Validadores
 // ─────────────────────────────────────────────
 export const validators = {
   product: ({ name, price }) => {
@@ -158,7 +158,7 @@ async function sheetsWrite(token, range, values) {
 }
 
 // ─────────────────────────────────────────────
-// ✅ FASE 2 — Retry helper (tenta até 3x em erro de rede)
+// ✅ FASE 2 — Retry helper
 // ─────────────────────────────────────────────
 async function withRetry(fn, retries = 3, delay = 1500) {
   for (let i = 0; i < retries; i++) {
@@ -343,7 +343,7 @@ function Sel({ label, value, onChange, options, hint, error }) {
 }
 
 // ─────────────────────────────────────────────
-// ✅ FASE 2 — SaveStatusBar: indicador visual de status
+// ✅ FASE 2 — SaveStatusBar
 // ─────────────────────────────────────────────
 function SaveStatusBar({ status, onSave, lastSavedAt }) {
   const configs = {
@@ -363,7 +363,6 @@ function SaveStatusBar({ status, onSave, lastSavedAt }) {
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      {/* Indicador de texto */}
       <div style={{
         background: "rgba(255,255,255,0.15)",
         borderRadius: 8,
@@ -382,7 +381,6 @@ function SaveStatusBar({ status, onSave, lastSavedAt }) {
         )}
       </div>
 
-      {/* Botão Salvar — aparece quando há pendências ou erro */}
       {cfg.btn && (
         <button
           onClick={onSave}
@@ -426,24 +424,16 @@ export default function App() {
   const [authStatus, setAuthStatus]  = useState("loading");
   const [loadMsg,  setLoadMsg]       = useState("Carregando...");
 
-  // ─────────────────────────────────────────────
-  // ✅ FASE 2 — Estados de save
-  // ─────────────────────────────────────────────
   const [saveStatus,  setSaveStatus]  = useState(SAVE_STATUS.IDLE);
   const [lastSavedAt, setLastSavedAt] = useState(null);
   const [saveError,   setSaveError]   = useState("");
 
-  // Refs para auto-save (debounce)
   const autoSaveTimer    = useRef(null);
   const pendingDataRef   = useRef({ products: null, sales: null, expenses: null });
   const tokenRef         = useRef(null);
 
-  // Mantém tokenRef sempre atualizado
   useEffect(() => { tokenRef.current = token; }, [token]);
 
-  // ─────────────────────────────────────────────
-  // ✅ FASE 2 — Aviso ao fechar com dados pendentes
-  // ─────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
       if (saveStatus === SAVE_STATUS.PENDING || saveStatus === SAVE_STATUS.SAVING) {
@@ -455,9 +445,6 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [saveStatus]);
 
-  // ─────────────────────────────────────────────
-  // ✅ FASE 2 — Função central de persistência
-  // ─────────────────────────────────────────────
   const persistAll = useCallback(async (prods, sls, exps) => {
     const tk = tokenRef.current;
     if (!tk) return;
@@ -467,7 +454,6 @@ export default function App() {
 
     try {
       await withRetry(async () => {
-        // Salva em paralelo quando possível
         await Promise.all([
           (async () => {
             await sheetsClear(tk, "Produtos!A:E");
@@ -497,7 +483,6 @@ export default function App() {
       setLastSavedAt(new Date());
       pendingDataRef.current = { products: null, sales: null, expenses: null };
 
-      // Volta para IDLE após 3s
       setTimeout(() => setSaveStatus(s => s === SAVE_STATUS.SAVED ? SAVE_STATUS.IDLE : s), 3000);
 
     } catch (e) {
@@ -506,29 +491,20 @@ export default function App() {
     }
   }, []);
 
-  // ─────────────────────────────────────────────
-  // ✅ FASE 2 — Agenda auto-save com debounce de 3s
-  // ─────────────────────────────────────────────
   const scheduleAutoSave = useCallback((prods, sls, exps) => {
-    // Armazena dados mais recentes para o save
     pendingDataRef.current = { products: prods, sales: sls, expenses: exps };
     setSaveStatus(SAVE_STATUS.PENDING);
 
-    // Cancela timer anterior e agenda novo
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
       const { products: p, sales: s, expenses: e } = pendingDataRef.current;
       if (p && s && e) persistAll(p, s, e);
-    }, 3000); // 3 segundos de debounce
+    }, 3000);
   }, [persistAll]);
 
-  // ─────────────────────────────────────────────
-  // ✅ FASE 2 — Salvar manualmente (botão)
-  // ─────────────────────────────────────────────
   const handleManualSave = useCallback(() => {
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     const { products: p, sales: s, expenses: e } = pendingDataRef.current;
-    // Se há dados pendentes, salva; senão pega o estado atual via ref
     persistAll(
       p ?? products,
       s ?? sales,
@@ -536,18 +512,13 @@ export default function App() {
     );
   }, [persistAll, products, sales, expenses]);
 
-  // Cleanup timer no unmount
   useEffect(() => () => {
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
   }, []);
 
-  // ─────────────────────────────────────────────
-  // Setters que disparam o auto-save
-  // ─────────────────────────────────────────────
   const setProducts = useCallback((fn) => {
     setProductsState(prev => {
       const next = typeof fn === "function" ? fn(prev) : fn;
-      // Precisa dos valores atuais de sales e expenses
       setSalesState(s => { setExpensesState(ex => { scheduleAutoSave(next, s, ex); return ex; }); return s; });
       return next;
     });
@@ -569,9 +540,6 @@ export default function App() {
     });
   }, [scheduleAutoSave]);
 
-  // ─────────────────────────────────────────────
-  // Verificação de env vars
-  // ─────────────────────────────────────────────
   useEffect(() => {
     if (!SHEET_ID || !API_KEY || !CLIENT_ID) {
       setAuthStatus("error");
@@ -667,9 +635,6 @@ export default function App() {
     tokenClient.requestAccessToken({ prompt: "select_account" });
   }, [loadAll]);
 
-  // ─────────────────────────────────────────────
-  // Filtros e cálculos (inalterados)
-  // ─────────────────────────────────────────────
   const filteredSales = useMemo(() => {
     if (period === "month")    return sales.filter(s => s.month === selMonth && s.year === selYear);
     if (period === "quarter")  { const q = Math.ceil(selMonth / 3); return sales.filter(s => Math.ceil(s.month / 3) === q && s.year === selYear); }
@@ -698,11 +663,13 @@ export default function App() {
   const profit = totalRevenue - totalExpense;
   const margin = totalRevenue > 0 ? ((profit / totalRevenue) * 100).toFixed(1) : 0;
 
+  // ─── ✅ TABS com Pricing adicionado ───
   const TABS = [
     { id:"dashboard", icon:"📊", label:"Painel" },
     { id:"products",  icon:"🛍️", label:"Catálogo" },
     { id:"sales",     icon:"💰", label:"Receitas" },
     { id:"expenses",  icon:"💸", label:"Despesas" },
+    { id:"pricing",   icon:"🧮", label:"Preços" },
     { id:"reports",   icon:"📈", label:"Relatórios" },
   ];
 
@@ -747,7 +714,6 @@ export default function App() {
       }}>
         <div>
           <div style={{ color:"#fff", fontWeight:800, fontSize:20 }}>💼 FinFacil</div>
-          {/* ✅ FASE 2 — SaveStatusBar no header */}
           <SaveStatusBar
             status={saveStatus}
             onSave={handleManualSave}
@@ -778,7 +744,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* ✅ FASE 2 — Banner de erro de save (quando ocorre) */}
+      {/* Banner de erro */}
       {saveStatus === SAVE_STATUS.ERROR && saveError && (
         <div style={{
           background:"#fee2e2", padding:"10px 20px", fontSize:13,
@@ -826,6 +792,14 @@ export default function App() {
             filteredExpenses={filteredExpenses} fmt={fmt}
           />
         )}
+        {/* ✅ Aba Pricing adicionada */}
+        {tab === "pricing" && (
+          <Pricing
+            products={products}
+            expenses={expenses}
+            fmt={fmt}
+          />
+        )}
         {tab === "reports" && (
           <Reports products={products} sales={sales} expenses={expenses} fmt={fmt} selYear={selYear} />
         )}
@@ -854,7 +828,7 @@ export default function App() {
 }
 
 // ─────────────────────────────────────────────
-// Dashboard (inalterado)
+// Dashboard
 // ─────────────────────────────────────────────
 function Dashboard({ products, filteredSales, filteredExpenses, totalRevenue, totalExpense, profit, margin, fmt, sales, expenses, selYear }) {
   const health      = profit > 0 && margin > 15 ? "green" : profit > 0 ? "yellow" : "red";
@@ -954,7 +928,7 @@ function Dashboard({ products, filteredSales, filteredExpenses, totalRevenue, to
 }
 
 // ─────────────────────────────────────────────
-// Products (inalterado — usa setProducts novo)
+// Products
 // ─────────────────────────────────────────────
 function Products({ products, setProducts, fmt, sales }) {
   const emptyForm = { name:"", cat:"Produto", price:"", desc:"" };
@@ -1030,7 +1004,7 @@ function Products({ products, setProducts, fmt, sales }) {
 }
 
 // ─────────────────────────────────────────────
-// Sales (inalterado — usa setSales novo)
+// Sales
 // ─────────────────────────────────────────────
 function Sales({ sales, setSales, products, filteredSales, fmt, selMonth, selYear }) {
   const emptyForm = { productId:"", qty:"1", date: TODAY, note:"" };
@@ -1126,7 +1100,7 @@ function Sales({ sales, setSales, products, filteredSales, fmt, selMonth, selYea
 }
 
 // ─────────────────────────────────────────────
-// Expenses (inalterado — usa setExpenses novo)
+// Expenses
 // ─────────────────────────────────────────────
 function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
   const emptyForm = { desc:"", cat:"fixo", value:"", date: TODAY };
@@ -1220,7 +1194,206 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
 }
 
 // ─────────────────────────────────────────────
-// Reports (inalterado)
+// ✅ NOVO — Pricing (Calculadora de Preços)
+// ─────────────────────────────────────────────
+function Pricing({ products, expenses, fmt }) {
+  const [selectedProduct, setSelectedProduct] = useState("");
+  const [desiredMargin,   setDesiredMargin]   = useState("30");
+  const [monthlyUnits,    setMonthlyUnits]     = useState("10");
+  const [extraCost,       setExtraCost]        = useState("0");
+
+  // Calcula total de custos fixos e variáveis mensais
+  const currentMonth = new Date().getMonth() + 1;
+  const currentYear  = new Date().getFullYear();
+
+  const monthlyFixed = useMemo(() =>
+    expenses
+      .filter(e => e.cat === "fixo" && e.month === currentMonth && e.year === currentYear)
+      .reduce((s, e) => s + e.value, 0),
+  [expenses, currentMonth, currentYear]);
+
+  const monthlyVariable = useMemo(() =>
+    expenses
+      .filter(e => e.cat === "variavel" && e.month === currentMonth && e.year === currentYear)
+      .reduce((s, e) => s + e.value, 0),
+  [expenses, currentMonth, currentYear]);
+
+  const monthlyLabor = useMemo(() =>
+    expenses
+      .filter(e => e.cat === "pessoal" && e.month === currentMonth && e.year === currentYear)
+      .reduce((s, e) => s + e.value, 0),
+  [expenses, currentMonth, currentYear]);
+
+  const totalMonthlyCost = monthlyFixed + monthlyVariable + monthlyLabor;
+
+  const product      = products.find(p => p.id === selectedProduct);
+  const units        = Math.max(1, Number(monthlyUnits) || 1);
+  const margin       = Math.min(99, Math.max(0, Number(desiredMargin) || 0));
+  const extra        = Math.max(0, parseFloat(extraCost) || 0);
+
+  // Custo por unidade = (custos mensais totais / unidades) + custo extra unitário
+  const costPerUnit  = totalMonthlyCost > 0 ? (totalMonthlyCost / units) + extra : extra;
+
+  // Preço sugerido = custo / (1 - margem%)
+  const suggestedPrice = margin < 100 ? costPerUnit / (1 - margin / 100) : 0;
+
+  // Comparação com preço atual
+  const currentPrice   = product ? product.price : 0;
+  const priceDiff      = currentPrice - suggestedPrice;
+  const priceStatus    =
+    !product           ? null :
+    priceDiff > 0.01   ? "above" :   // preço atual acima do sugerido ✅
+    priceDiff < -0.01  ? "below" :   // preço atual abaixo do sugerido ⚠️
+                         "ok";        // praticamente igual
+
+  // Lucro projetado mensal
+  const projectedRevenue = (product ? product.price : suggestedPrice) * units;
+  const projectedProfit  = projectedRevenue - totalMonthlyCost - (extra * units);
+
+  return (
+    <div>
+      <h2 style={{ fontSize:22, fontWeight:800, marginBottom:4 }}>🧮 Calculadora de Preços</h2>
+      <p style={{ color:"#6b7280", fontSize:14, marginBottom:16 }}>
+        Descubra o preço mínimo para cobrir seus custos e atingir a margem desejada.
+      </p>
+
+      {/* Resumo de custos do mês atual */}
+      <Card style={{ borderLeft:"4px solid #6366f1" }}>
+        <h3 style={{ margin:"0 0 12px", fontSize:15, fontWeight:700 }}>
+          📅 Custos do mês atual — {MONTHS[currentMonth - 1]}/{currentYear}
+        </h3>
+        {totalMonthlyCost === 0 ? (
+          <p style={{ color:"#9ca3af", fontSize:14 }}>
+            ⚠️ Nenhum custo registrado este mês. Cadastre despesas para um cálculo mais preciso.
+          </p>
+        ) : (
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+            {[
+              ["🏢 Custos Fixos",    monthlyFixed,    "#6366f1"],
+              ["📦 Custos Variáveis", monthlyVariable, "#f59e0b"],
+              ["👷 Mão de Obra",     monthlyLabor,    "#10b981"],
+            ].map(([label, val, color]) => (
+              <div key={label} style={{ background:"#f9fafb", borderRadius:12, padding:"12px 14px", borderTop:`3px solid ${color}` }}>
+                <div style={{ fontSize:12, color:"#6b7280", fontWeight:600 }}>{label}</div>
+                <div style={{ fontSize:16, fontWeight:800, color, marginTop:4 }}>{fmt(val)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ marginTop:12, padding:"10px 14px", background:"#f0f4ff", borderRadius:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontWeight:700, color:"#374151" }}>Total de custos mensais:</span>
+          <span style={{ fontWeight:800, fontSize:18, color:"#6366f1" }}>{fmt(totalMonthlyCost)}</span>
+        </div>
+      </Card>
+
+      {/* Parâmetros do cálculo */}
+      <Card>
+        <h3 style={{ margin:"0 0 12px", fontSize:15, fontWeight:700 }}>⚙️ Parâmetros</h3>
+
+        <Sel
+          label="Produto para comparar (opcional)"
+          value={selectedProduct}
+          onChange={setSelectedProduct}
+          hint="Compare o preço atual com o preço sugerido"
+          options={[
+            { value:"", label:"— Nenhum —" },
+            ...products.map(p => ({ value: p.id, label: `${p.cat === "Serviço" ? "🛠️" : "📦"} ${p.name} — ${fmt(p.price)}` })),
+          ]}
+        />
+
+        <Inp
+          label="Unidades vendidas por mês"
+          type="number"
+          value={monthlyUnits}
+          onChange={setMonthlyUnits}
+          hint="Quantas unidades você espera vender no mês"
+          placeholder="Ex: 10"
+        />
+
+        <Inp
+          label="Margem de lucro desejada (%)"
+          type="number"
+          value={desiredMargin}
+          onChange={setDesiredMargin}
+          hint="% de lucro sobre o preço de venda (ex: 30 = 30%)"
+          placeholder="Ex: 30"
+          prefix="%"
+        />
+
+        <Inp
+          label="Custo extra por unidade (R$)"
+          type="number"
+          value={extraCost}
+          onChange={setExtraCost}
+          hint="Custo adicional por unidade não incluído nas despesas (ex: embalagem)"
+          placeholder="0"
+          prefix="R$"
+        />
+      </Card>
+
+      {/* Resultado */}
+      <Card style={{ borderLeft:"4px solid #10b981" }}>
+        <h3 style={{ margin:"0 0 16px", fontSize:15, fontWeight:700 }}>📊 Resultado do Cálculo</h3>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+          <div style={{ background:"#f0fdf4", borderRadius:12, padding:16, textAlign:"center" }}>
+            <div style={{ fontSize:12, color:"#6b7280", fontWeight:600, marginBottom:4 }}>💰 Custo por unidade</div>
+            <div style={{ fontSize:22, fontWeight:800, color:"#374151" }}>{fmt(costPerUnit)}</div>
+          </div>
+          <div style={{ background:"#f0fdf4", borderRadius:12, padding:16, textAlign:"center" }}>
+            <div style={{ fontSize:12, color:"#6b7280", fontWeight:600, marginBottom:4 }}>🎯 Preço sugerido</div>
+            <div style={{ fontSize:22, fontWeight:800, color:"#10b981" }}>{fmt(suggestedPrice)}</div>
+          </div>
+        </div>
+
+        {/* Comparação com produto selecionado */}
+        {product && (
+          <div style={{
+            padding:"12px 16px", borderRadius:12, marginBottom:12,
+            background:
+              priceStatus === "above" ? "#f0fdf4" :
+              priceStatus === "below" ? "#fff7ed" : "#f0f4ff",
+            border: `1.5px solid ${
+              priceStatus === "above" ? "#bbf7d0" :
+              priceStatus === "below" ? "#fed7aa" : "#c7d2fe"
+            }`,
+          }}>
+            <div style={{ fontWeight:700, fontSize:14, marginBottom:4 }}>
+              {priceStatus === "above" && "✅ Preço atual acima do mínimo sugerido"}
+              {priceStatus === "below" && "⚠️ Preço atual abaixo do mínimo sugerido!"}
+              {priceStatus === "ok"    && "✅ Preço atual alinhado com o sugerido"}
+            </div>
+            <div style={{ display:"flex", gap:16, fontSize:13, color:"#6b7280" }}>
+              <span>Atual: <strong style={{ color:"#374151" }}>{fmt(currentPrice)}</strong></span>
+              <span>Sugerido: <strong style={{ color:"#10b981" }}>{fmt(suggestedPrice)}</strong></span>
+              <span>Diferença: <strong style={{ color: priceDiff >= 0 ? "#10b981" : "#ef4444" }}>{priceDiff >= 0 ? "+" : ""}{fmt(priceDiff)}</strong></span>
+            </div>
+          </div>
+        )}
+
+        {/* Projeção mensal */}
+        <div style={{ background:"#f5f3ff", borderRadius:12, padding:"12px 16px" }}>
+          <div style={{ fontWeight:700, fontSize:14, marginBottom:8, color:"#6366f1" }}>📈 Projeção mensal ({units} unidades)</div>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:14, marginBottom:4 }}>
+            <span style={{ color:"#6b7280" }}>Receita projetada:</span>
+            <span style={{ fontWeight:700, color:"#10b981" }}>{fmt(projectedRevenue)}</span>
+          </div>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:14, marginBottom:4 }}>
+            <span style={{ color:"#6b7280" }}>Custos totais:</span>
+            <span style={{ fontWeight:700, color:"#ef4444" }}>{fmt(totalMonthlyCost + extra * units)}</span>
+          </div>
+          <div style={{ borderTop:"1px solid #ddd6fe", paddingTop:8, marginTop:4, display:"flex", justifyContent:"space-between", fontSize:15 }}>
+            <span style={{ fontWeight:700 }}>Lucro líquido projetado:</span>
+            <span style={{ fontWeight:800, color: projectedProfit >= 0 ? "#6366f1" : "#ef4444" }}>{fmt(projectedProfit)}</span>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// Reports
 // ─────────────────────────────────────────────
 function Reports({ products, sales, expenses, fmt, selYear }) {
   const monthlyData = MONTHS.map((name, i) => {
