@@ -1403,29 +1403,47 @@ function Expenses({ expenses, setExpenses, filteredExpenses, fmt }) {
 // ─────────────────────────────────────────────
 // Pricing — Calculadora de Precificação Detalhada
 // ─────────────────────────────────────────────
-function Pricing({ products, expenses, setProducts, fmt }) {
+function Pricing({ products = [], expenses = [], setProducts, fmt }) {
   const today = new Date();
   const currentMonth = today.getMonth() + 1;
   const currentYear = today.getFullYear();
 
-  const [selectedProductId, setSelectedProductId] = useState(products?.[0]?.id || "");
-  const [materialCost, setMaterialCost] = useState("");
-  const [packaging, setPackaging] = useState("");
-  const [shipping, setShipping] = useState("");
-  const [shippingMode, setShippingMode] = useState("fixed");
-  const [otherCosts, setOtherCosts] = useState("");
-  const [useFixedCosts, setUseFixedCosts] = useState(true);
-  const [monthlyUnits, setMonthlyUnits] = useState("10");
-  const [laborHours, setLaborHours] = useState("");
-  const [hourlyRate, setHourlyRate] = useState("");
-  const [margin, setMargin] = useState("30");
-  const [taxRate, setTaxRate] = useState("0");
-  const [saveMessage, setSaveMessage] = useState("");
+  const NEW_PRODUCT_ID = "__new_product__";
+
+  const getProductId = (product, index) => {
+    return product?.id ?? product?._id ?? product?.codigo ?? `produto-${index}`;
+  };
+
+  const getProductName = (product, index) => {
+    return (
+      product?.nome ||
+      product?.name ||
+      product?.produto ||
+      product?.titulo ||
+      product?.descricao ||
+      product?.description ||
+      `Produto ${index + 1}`
+    );
+  };
+
+  const getProductPrice = (product) => {
+    return (
+      product?.preco ??
+      product?.precoVenda ??
+      product?.valor ??
+      product?.price ??
+      product?.valorVenda ??
+      product?.salePrice ??
+      0
+    );
+  };
 
   const toNumber = (value) => {
     if (value === null || value === undefined || value === "") return 0;
 
-    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : 0;
+    }
 
     const normalized = String(value)
       .replace(/\s/g, "")
@@ -1434,6 +1452,7 @@ function Pricing({ products, expenses, setProducts, fmt }) {
       .replace(",", ".");
 
     const parsed = parseFloat(normalized);
+
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
@@ -1446,19 +1465,90 @@ function Pricing({ products, expenses, setProducts, fmt }) {
     }).format(value || 0);
   };
 
-  const selectedProduct = useMemo(() => {
-    return products.find((product) => String(product.id) === String(selectedProductId));
+  const [selectedProductId, setSelectedProductId] = useState(
+    products.length > 0 ? String(getProductId(products[0], 0)) : NEW_PRODUCT_ID
+  );
+
+  const [newProductName, setNewProductName] = useState("");
+  const [newProductStock, setNewProductStock] = useState("0");
+
+  const [supplies, setSupplies] = useState([]);
+  const [supplyName, setSupplyName] = useState("");
+  const [supplyCost, setSupplyCost] = useState("");
+
+  const [manualMaterialCost, setManualMaterialCost] = useState("");
+  const [packaging, setPackaging] = useState("");
+  const [shipping, setShipping] = useState("");
+  const [shippingMode, setShippingMode] = useState("fixed");
+  const [otherCosts, setOtherCosts] = useState("");
+
+  const [useFixedCosts, setUseFixedCosts] = useState(true);
+  const [monthlyUnits, setMonthlyUnits] = useState("10");
+
+  const [laborHours, setLaborHours] = useState("");
+  const [hourlyRate, setHourlyRate] = useState("");
+
+  const [margin, setMargin] = useState("30");
+  const [taxRate, setTaxRate] = useState("0");
+
+  const [saveMessage, setSaveMessage] = useState("");
+
+  useEffect(() => {
+    if (products.length === 0) {
+      setSelectedProductId(NEW_PRODUCT_ID);
+      return;
+    }
+
+    const exists = products.some((product, index) => {
+      return String(getProductId(product, index)) === String(selectedProductId);
+    });
+
+    if (!exists && selectedProductId !== NEW_PRODUCT_ID) {
+      setSelectedProductId(String(getProductId(products[0], 0)));
+    }
+  }, [products]);
+
+  const selectedProductInfo = useMemo(() => {
+    if (selectedProductId === NEW_PRODUCT_ID) return null;
+
+    const index = products.findIndex((product, productIndex) => {
+      return String(getProductId(product, productIndex)) === String(selectedProductId);
+    });
+
+    if (index < 0) return null;
+
+    return {
+      product: products[index],
+      index,
+      id: getProductId(products[index], index),
+      name: getProductName(products[index], index),
+      price: toNumber(getProductPrice(products[index])),
+    };
   }, [products, selectedProductId]);
+
+  const isNewProduct = selectedProductId === NEW_PRODUCT_ID;
 
   const monthlyFixedCosts = useMemo(() => {
     return expenses
       .filter((expense) => {
-        const category = String(expense.categoria || "").toLowerCase();
+        const category = String(
+          expense?.categoria ||
+            expense?.category ||
+            expense?.tipo ||
+            ""
+        ).toLowerCase();
 
-        const isFixedCategory = ["fixo", "marketing", "financeiro"].includes(category);
+        const isFixedCategory = [
+          "fixo",
+          "fixa",
+          "custos fixos",
+          "custo fixo",
+          "marketing",
+          "financeiro",
+        ].includes(category);
 
-        const expenseMonth = Number(expense.mes);
-        const expenseYear = Number(expense.ano);
+        const expenseMonth = Number(expense?.mes || expense?.month);
+        const expenseYear = Number(expense?.ano || expense?.year);
 
         const hasMonthAndYear = expenseMonth && expenseYear;
 
@@ -1468,16 +1558,24 @@ function Pricing({ products, expenses, setProducts, fmt }) {
 
         return expenseMonth === currentMonth && expenseYear === currentYear;
       })
-      .reduce((sum, expense) => sum + toNumber(expense.valor), 0);
+      .reduce((sum, expense) => {
+        return sum + toNumber(expense?.valor ?? expense?.amount ?? expense?.value);
+      }, 0);
   }, [expenses]);
 
+  const suppliesTotal = useMemo(() => {
+    return supplies.reduce((sum, item) => sum + toNumber(item.cost), 0);
+  }, [supplies]);
+
   const materialTotal = useMemo(() => {
-    const manualMaterialCost = toNumber(materialCost);
+    const manual = toNumber(manualMaterialCost);
 
-    if (manualMaterialCost > 0) return manualMaterialCost;
+    if (suppliesTotal > 0) return suppliesTotal;
 
-    return toNumber(selectedProduct?.preco);
-  }, [materialCost, selectedProduct]);
+    if (manual > 0) return manual;
+
+    return 0;
+  }, [suppliesTotal, manualMaterialCost]);
 
   const packagingTotal = useMemo(() => {
     return toNumber(packaging);
@@ -1504,8 +1602,20 @@ function Pricing({ products, expenses, setProducts, fmt }) {
   }, [useFixedCosts, monthlyFixedCosts, unitsPerMonth]);
 
   const subtotalBeforeShipping = useMemo(() => {
-    return materialTotal + packagingTotal + otherCostsTotal + laborTotal + fixedCostPerUnit;
-  }, [materialTotal, packagingTotal, otherCostsTotal, laborTotal, fixedCostPerUnit]);
+    return (
+      materialTotal +
+      packagingTotal +
+      otherCostsTotal +
+      laborTotal +
+      fixedCostPerUnit
+    );
+  }, [
+    materialTotal,
+    packagingTotal,
+    otherCostsTotal,
+    laborTotal,
+    fixedCostPerUnit,
+  ]);
 
   const shippingTotal = useMemo(() => {
     const value = toNumber(shipping);
@@ -1551,49 +1661,134 @@ function Pricing({ products, expenses, setProducts, fmt }) {
     return totalCost / (1 - deductions);
   }, [totalCost, taxPercent]);
 
-  const idealPrice = useMemo(() => {
-    return suggestedPrice;
-  }, [suggestedPrice]);
+  const idealPrice = suggestedPrice;
+  const premiumPrice = suggestedPrice * 1.35;
 
-  const premiumPrice = useMemo(() => {
-    return suggestedPrice * 1.35;
-  }, [suggestedPrice]);
+  const projectedRevenue = suggestedPrice * unitsPerMonth;
+  const projectedCosts = totalCost * unitsPerMonth;
+  const projectedProfit = projectedRevenue - projectedCosts;
 
-  const projectedRevenue = useMemo(() => {
-    return suggestedPrice * unitsPerMonth;
-  }, [suggestedPrice, unitsPerMonth]);
+  const addSupply = () => {
+    const name = supplyName.trim();
+    const cost = toNumber(supplyCost);
 
-  const projectedCosts = useMemo(() => {
-    return totalCost * unitsPerMonth;
-  }, [totalCost, unitsPerMonth]);
-
-  const projectedProfit = useMemo(() => {
-    return projectedRevenue - projectedCosts;
-  }, [projectedRevenue, projectedCosts]);
-
-  const saveSuggestedPrice = () => {
-    if (!selectedProduct) {
-      setSaveMessage("Selecione um produto para salvar o preço.");
+    if (!name) {
+      setSaveMessage("Informe o nome do insumo.");
       return;
     }
 
+    if (cost <= 0) {
+      setSaveMessage("Informe o custo do insumo.");
+      return;
+    }
+
+    const newSupply = {
+      id: Date.now(),
+      name,
+      cost,
+    };
+
+    setSupplies((previous) => [...previous, newSupply]);
+    setSupplyName("");
+    setSupplyCost("");
+    setSaveMessage("");
+  };
+
+  const removeSupply = (id) => {
+    setSupplies((previous) => previous.filter((item) => item.id !== id));
+  };
+
+  const clearPricingForm = () => {
+    setNewProductName("");
+    setNewProductStock("0");
+    setSupplies([]);
+    setSupplyName("");
+    setSupplyCost("");
+    setManualMaterialCost("");
+    setPackaging("");
+    setShipping("");
+    setShippingMode("fixed");
+    setOtherCosts("");
+    setUseFixedCosts(true);
+    setMonthlyUnits("10");
+    setLaborHours("");
+    setHourlyRate("");
+    setMargin("30");
+    setTaxRate("0");
+  };
+
+  const saveSuggestedPrice = () => {
     if (!suggestedPrice || suggestedPrice <= 0) {
       setSaveMessage("Informe os custos corretamente antes de salvar.");
       return;
     }
 
+    if (isNewProduct) {
+      const name = newProductName.trim();
+
+      if (!name) {
+        setSaveMessage("Informe o nome do novo produto.");
+        return;
+      }
+
+      const newProduct = {
+        id: Date.now(),
+        nome: name,
+        preco: Number(suggestedPrice.toFixed(2)),
+        estoque: toNumber(newProductStock),
+        custoMateriaPrima: Number(materialTotal.toFixed(2)),
+        custoTotal: Number(totalCost.toFixed(2)),
+        insumos: supplies.map((item) => ({
+          nome: item.name,
+          valor: Number(toNumber(item.cost).toFixed(2)),
+        })),
+      };
+
+      setProducts((previousProducts) => [...previousProducts, newProduct]);
+
+      setSaveMessage(
+        `Produto "${name}" criado com preço sugerido de ${money(suggestedPrice)}.`
+      );
+
+      clearPricingForm();
+
+      setTimeout(() => {
+        setSaveMessage("");
+      }, 3500);
+
+      return;
+    }
+
+    if (!selectedProductInfo) {
+      setSaveMessage("Selecione um produto para salvar o preço.");
+      return;
+    }
+
     setProducts((previousProducts) =>
-      previousProducts.map((product) =>
-        String(product.id) === String(selectedProduct.id)
-          ? {
-              ...product,
-              preco: Number(suggestedPrice.toFixed(2)),
-            }
-          : product
-      )
+      previousProducts.map((product, index) => {
+        const currentId = String(getProductId(product, index));
+
+        if (currentId !== String(selectedProductId)) return product;
+
+        return {
+          ...product,
+          preco: Number(suggestedPrice.toFixed(2)),
+          precoVenda: product?.precoVenda !== undefined
+            ? Number(suggestedPrice.toFixed(2))
+            : product?.precoVenda,
+          custoMateriaPrima: Number(materialTotal.toFixed(2)),
+          custoTotal: Number(totalCost.toFixed(2)),
+          insumos: supplies.map((item) => ({
+            nome: item.name,
+            valor: Number(toNumber(item.cost).toFixed(2)),
+          })),
+        };
+      })
     );
 
-    setSaveMessage(`Preço de ${money(suggestedPrice)} salvo em ${selectedProduct.nome}.`);
+    setSaveMessage(
+      `Preço de ${money(suggestedPrice)} salvo em ${selectedProductInfo.name}.`
+    );
 
     setTimeout(() => {
       setSaveMessage("");
@@ -1608,8 +1803,8 @@ function Pricing({ products, expenses, setProducts, fmt }) {
         </h2>
 
         <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
-          Calcule o preço ideal considerando custo, embalagem, frete, mão de obra,
-          despesas fixas, impostos e margem de lucro.
+          Calcule o preço ideal considerando insumos, embalagem, frete,
+          mão de obra, custos fixos, impostos e margem de lucro.
         </p>
       </div>
 
@@ -1618,115 +1813,286 @@ function Pricing({ products, expenses, setProducts, fmt }) {
           📦 Produto para precificar
         </h3>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr",
-            gap: 12,
-          }}
-        >
-          <label style={{ display: "grid", gap: 6 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
-              Produto
-            </span>
+        <label style={{ display: "grid", gap: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
+            Escolha um produto cadastrado ou crie uma nova precificação
+          </span>
 
-            <select
-              value={selectedProductId}
-              onChange={(event) => {
-                setSelectedProductId(event.target.value);
-                setSaveMessage("");
-              }}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                borderRadius: 12,
-                border: "1px solid #d1d5db",
-                background: "#fff",
-                fontSize: 14,
-              }}
-            >
-              {products.length === 0 && (
-                <option value="">Nenhum produto cadastrado</option>
-              )}
+          <select
+            value={selectedProductId}
+            onChange={(event) => {
+              setSelectedProductId(event.target.value);
+              setSaveMessage("");
+            }}
+            style={{
+              width: "100%",
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1px solid #d1d5db",
+              background: "#fff",
+              fontSize: 14,
+            }}
+          >
+            <option value={NEW_PRODUCT_ID}>➕ Novo produto / nova precificação</option>
 
-              {products.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.nome} — preço atual: {money(toNumber(product.preco))}
+            {products.map((product, index) => {
+              const id = String(getProductId(product, index));
+              const name = getProductName(product, index);
+              const price = toNumber(getProductPrice(product));
+
+              return (
+                <option key={id} value={id}>
+                  {name} — preço atual: {money(price)}
                 </option>
-              ))}
-            </select>
-          </label>
+              );
+            })}
+          </select>
+        </label>
 
-          {selectedProduct && (
-            <div
-              style={{
-                padding: 12,
-                borderRadius: 12,
-                background: "#f8fafc",
-                border: "1px solid #e5e7eb",
-                fontSize: 13,
-                color: "#4b5563",
-              }}
-            >
-              <strong>{selectedProduct.nome}</strong>
-              <br />
-              Preço atual cadastrado:{" "}
-              <strong>{money(toNumber(selectedProduct.preco))}</strong>
-              {selectedProduct.estoque !== undefined && (
-                <>
-                  <br />
-                  Estoque atual: <strong>{selectedProduct.estoque}</strong>
-                </>
-              )}
-            </div>
-          )}
-        </div>
+        {isNewProduct ? (
+          <div
+            style={{
+              marginTop: 14,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 14,
+            }}
+          >
+            <label style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
+                Nome do novo produto
+              </span>
+
+              <input
+                value={newProductName}
+                onChange={(event) => setNewProductName(event.target.value)}
+                placeholder="Ex: Vela aromática lavanda"
+                style={{
+                  width: "100%",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #d1d5db",
+                  fontSize: 14,
+                }}
+              />
+            </label>
+
+            <label style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
+                Estoque inicial
+              </span>
+
+              <input
+                value={newProductStock}
+                onChange={(event) => setNewProductStock(event.target.value)}
+                placeholder="Ex: 10"
+                inputMode="numeric"
+                style={{
+                  width: "100%",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #d1d5db",
+                  fontSize: 14,
+                }}
+              />
+            </label>
+          </div>
+        ) : selectedProductInfo ? (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 12,
+              background: "#f8fafc",
+              border: "1px solid #e5e7eb",
+              fontSize: 13,
+              color: "#4b5563",
+            }}
+          >
+            <strong>{selectedProductInfo.name}</strong>
+            <br />
+            Preço atual cadastrado:{" "}
+            <strong>{money(selectedProductInfo.price)}</strong>
+            {selectedProductInfo.product?.estoque !== undefined && (
+              <>
+                <br />
+                Estoque atual:{" "}
+                <strong>{selectedProductInfo.product.estoque}</strong>
+              </>
+            )}
+          </div>
+        ) : null}
       </Card>
 
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 16, fontWeight: 800 }}>
-          🧵 Matéria-prima / custo base
+          🧵 Insumos / Matéria-prima
         </h3>
 
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
-            Custo de matéria-prima por unidade
-          </span>
+        <p style={{ marginTop: 0, color: "#6b7280", fontSize: 13 }}>
+          Adicione todos os insumos usados para produzir uma unidade do produto.
+        </p>
 
-          <div style={{ display: "flex", gap: 8 }}>
-            <span
-              style={{
-                padding: "12px 14px",
-                background: "#f3f4f6",
-                border: "1px solid #d1d5db",
-                borderRadius: 12,
-                fontWeight: 700,
-              }}
-            >
-              R$
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "2fr 1fr auto",
+            gap: 10,
+            alignItems: "end",
+          }}
+        >
+          <label style={{ display: "grid", gap: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
+              Nome do insumo
             </span>
 
             <input
-              value={materialCost}
-              onChange={(event) => setMaterialCost(event.target.value)}
-              placeholder={
-                selectedProduct
-                  ? `Usando preço atual: ${money(toNumber(selectedProduct.preco))}`
-                  : "Ex: 35,00"
-              }
-              inputMode="decimal"
+              value={supplyName}
+              onChange={(event) => setSupplyName(event.target.value)}
+              placeholder="Ex: Cera, pavio, essência..."
               style={{
-                flex: 1,
+                width: "100%",
                 padding: "12px 14px",
                 borderRadius: 12,
                 border: "1px solid #d1d5db",
                 fontSize: 14,
               }}
             />
+          </label>
+
+          <label style={{ display: "grid", gap: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
+              Custo
+            </span>
+
+            <input
+              value={supplyCost}
+              onChange={(event) => setSupplyCost(event.target.value)}
+              placeholder="Ex: 1,00"
+              inputMode="decimal"
+              style={{
+                width: "100%",
+                padding: "12px 14px",
+                borderRadius: 12,
+                border: "1px solid #d1d5db",
+                fontSize: 14,
+              }}
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={addSupply}
+            style={{
+              padding: "12px 16px",
+              borderRadius: 12,
+              border: "none",
+              background: "linear-gradient(135deg, #7c3aed, #4f46e5)",
+              color: "#fff",
+              fontWeight: 800,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            ➕ Adicionar
+          </button>
+        </div>
+
+        {supplies.length > 0 ? (
+          <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
+            {supplies.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  alignItems: "center",
+                  padding: 12,
+                  borderRadius: 12,
+                  background: "#f8fafc",
+                  border: "1px solid #e5e7eb",
+                }}
+              >
+                <div>
+                  <strong>{item.name}</strong>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>
+                    Custo: {money(toNumber(item.cost))}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => removeSupply(item.id)}
+                  style={{
+                    border: "none",
+                    background: "#fee2e2",
+                    color: "#991b1b",
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                    fontWeight: 800,
+                    cursor: "pointer",
+                  }}
+                >
+                  Remover
+                </button>
+              </div>
+            ))}
           </div>
+        ) : (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 12,
+              background: "#fffbeb",
+              border: "1px solid #fde68a",
+              color: "#92400e",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            Nenhum insumo adicionado ainda. Exemplo: Cera R$ 1,00, Pavio R$ 1,00,
+            Essência R$ 0,10.
+          </div>
+        )}
+
+        <div
+          style={{
+            marginTop: 14,
+            padding: 12,
+            borderRadius: 12,
+            background: "#ecfdf5",
+            border: "1px solid #bbf7d0",
+            color: "#065f46",
+            fontWeight: 800,
+          }}
+        >
+          Total de matéria-prima por unidade: {money(suppliesTotal)}
+        </div>
+
+        <label style={{ display: "grid", gap: 6, marginTop: 14 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
+            Custo manual de matéria-prima
+          </span>
+
+          <input
+            value={manualMaterialCost}
+            onChange={(event) => setManualMaterialCost(event.target.value)}
+            placeholder="Use apenas se não quiser cadastrar insumos item por item"
+            inputMode="decimal"
+            style={{
+              width: "100%",
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1px solid #d1d5db",
+              fontSize: 14,
+            }}
+          />
 
           <small style={{ color: "#6b7280" }}>
-            Se deixar vazio, o app usa o preço atual cadastrado no produto como custo base.
+            Se você adicionar insumos, o sistema usa a soma dos insumos. Se não
+            adicionar, usa este valor manual.
           </small>
         </label>
       </Card>
@@ -1748,64 +2114,34 @@ function Pricing({ products, expenses, setProducts, fmt }) {
               Custo da embalagem
             </span>
 
-            <div style={{ display: "flex", gap: 8 }}>
-              <span
-                style={{
-                  padding: "12px 14px",
-                  background: "#f3f4f6",
-                  border: "1px solid #d1d5db",
-                  borderRadius: 12,
-                  fontWeight: 700,
-                }}
-              >
-                R$
-              </span>
-
-              <input
-                value={packaging}
-                onChange={(event) => setPackaging(event.target.value)}
-                placeholder="Ex: 1,50"
-                inputMode="decimal"
-                style={{
-                  width: "100%",
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #d1d5db",
-                  fontSize: 14,
-                }}
-              />
-            </div>
-
-            <small style={{ color: "#6b7280" }}>
-              Caixa, saquinho, papel, fita, etiqueta etc.
-            </small>
+            <input
+              value={packaging}
+              onChange={(event) => setPackaging(event.target.value)}
+              placeholder="Ex: 1,50"
+              inputMode="decimal"
+              style={{
+                width: "100%",
+                padding: "12px 14px",
+                borderRadius: 12,
+                border: "1px solid #d1d5db",
+                fontSize: 14,
+              }}
+            />
           </label>
 
           <label style={{ display: "grid", gap: 6 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
-              Frete / postagem
+              Frete / logística
             </span>
 
             <div style={{ display: "flex", gap: 8 }}>
-              <span
-                style={{
-                  padding: "12px 14px",
-                  background: "#f3f4f6",
-                  border: "1px solid #d1d5db",
-                  borderRadius: 12,
-                  fontWeight: 700,
-                }}
-              >
-                {shippingMode === "fixed" ? "R$" : "%"}
-              </span>
-
               <input
                 value={shipping}
                 onChange={(event) => setShipping(event.target.value)}
                 placeholder={shippingMode === "fixed" ? "Ex: 12,00" : "Ex: 8"}
                 inputMode="decimal"
                 style={{
-                  width: "100%",
+                  flex: 1,
                   padding: "12px 14px",
                   borderRadius: 12,
                   border: "1px solid #d1d5db",
@@ -1823,17 +2159,12 @@ function Pricing({ products, expenses, setProducts, fmt }) {
                   background: "#fff",
                   fontSize: 13,
                   fontWeight: 700,
-                  color: "#4f46e5",
                 }}
               >
                 <option value="fixed">R$ fixo</option>
                 <option value="percent">% custo</option>
               </select>
             </div>
-
-            <small style={{ color: "#6b7280" }}>
-              Valor fixo ou percentual sobre o custo.
-            </small>
           </label>
         </div>
 
@@ -1842,33 +2173,19 @@ function Pricing({ products, expenses, setProducts, fmt }) {
             Outros custos diretos
           </span>
 
-          <div style={{ display: "flex", gap: 8 }}>
-            <span
-              style={{
-                padding: "12px 14px",
-                background: "#f3f4f6",
-                border: "1px solid #d1d5db",
-                borderRadius: 12,
-                fontWeight: 700,
-              }}
-            >
-              R$
-            </span>
-
-            <input
-              value={otherCosts}
-              onChange={(event) => setOtherCosts(event.target.value)}
-              placeholder="Ex: taxas de marketplace, comissão, insumos extras..."
-              inputMode="decimal"
-              style={{
-                flex: 1,
-                padding: "12px 14px",
-                borderRadius: 12,
-                border: "1px solid #d1d5db",
-                fontSize: 14,
-              }}
-            />
-          </div>
+          <input
+            value={otherCosts}
+            onChange={(event) => setOtherCosts(event.target.value)}
+            placeholder="Ex: taxas de marketplace, comissão, etiqueta..."
+            inputMode="decimal"
+            style={{
+              width: "100%",
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1px solid #d1d5db",
+              fontSize: 14,
+            }}
+          />
         </label>
       </Card>
 
@@ -1889,10 +2206,7 @@ function Pricing({ products, expenses, setProducts, fmt }) {
             marginBottom: 14,
           }}
         >
-          📊 Custos fixos detectados este mês: {money(monthlyFixedCosts)}{" "}
-          <span style={{ fontWeight: 500 }}>
-            — categorias: fixo, marketing e financeiro.
-          </span>
+          Custos fixos detectados: {money(monthlyFixedCosts)}
         </div>
 
         <label
@@ -1955,7 +2269,7 @@ function Pricing({ products, expenses, setProducts, fmt }) {
         >
           <label style={{ display: "grid", gap: 6 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
-              Horas trabalhadas
+              Horas trabalhadas por unidade
             </span>
 
             <input
@@ -1971,10 +2285,6 @@ function Pricing({ products, expenses, setProducts, fmt }) {
                 fontSize: 14,
               }}
             />
-
-            <small style={{ color: "#6b7280" }}>
-              Tempo para produzir 1 unidade.
-            </small>
           </label>
 
           <label style={{ display: "grid", gap: 6 }}>
@@ -1982,36 +2292,22 @@ function Pricing({ products, expenses, setProducts, fmt }) {
               Valor por hora
             </span>
 
-            <div style={{ display: "flex", gap: 8 }}>
-              <span
-                style={{
-                  padding: "12px 14px",
-                  background: "#f3f4f6",
-                  border: "1px solid #d1d5db",
-                  borderRadius: 12,
-                  fontWeight: 700,
-                }}
-              >
-                R$
-              </span>
-
-              <input
-                value={hourlyRate}
-                onChange={(event) => setHourlyRate(event.target.value)}
-                placeholder="Ex: 15,00"
-                inputMode="decimal"
-                style={{
-                  flex: 1,
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #d1d5db",
-                  fontSize: 14,
-                }}
-              />
-            </div>
+            <input
+              value={hourlyRate}
+              onChange={(event) => setHourlyRate(event.target.value)}
+              placeholder="Ex: 15,00"
+              inputMode="decimal"
+              style={{
+                width: "100%",
+                padding: "12px 14px",
+                borderRadius: 12,
+                border: "1px solid #d1d5db",
+                fontSize: 14,
+              }}
+            />
 
             <small style={{ color: "#6b7280" }}>
-              Mão de obra total: <strong>{money(laborTotal)}</strong>
+              Mão de obra por unidade: <strong>{money(laborTotal)}</strong>
             </small>
           </label>
         </div>
@@ -2056,48 +2352,26 @@ function Pricing({ products, expenses, setProducts, fmt }) {
               <strong style={{ color: "#4f46e5", fontSize: 15 }}>{margin}%</strong>
               <span>80%</span>
             </div>
-
-            <small style={{ color: "#6b7280" }}>
-              Percentual sobre o preço final de venda.
-            </small>
           </label>
 
           <label style={{ display: "grid", gap: 6 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>
-              Imposto / Taxa
+              Imposto / taxa
             </span>
 
-            <div style={{ display: "flex", gap: 8 }}>
-              <span
-                style={{
-                  padding: "12px 14px",
-                  background: "#f3f4f6",
-                  border: "1px solid #d1d5db",
-                  borderRadius: 12,
-                  fontWeight: 700,
-                }}
-              >
-                %
-              </span>
-
-              <input
-                value={taxRate}
-                onChange={(event) => setTaxRate(event.target.value)}
-                placeholder="Ex: 6"
-                inputMode="decimal"
-                style={{
-                  flex: 1,
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #d1d5db",
-                  fontSize: 14,
-                }}
-              />
-            </div>
-
-            <small style={{ color: "#6b7280" }}>
-              Exemplo: 6 para Simples Nacional. Use 0 se for MEI isento.
-            </small>
+            <input
+              value={taxRate}
+              onChange={(event) => setTaxRate(event.target.value)}
+              placeholder="Ex: 6"
+              inputMode="decimal"
+              style={{
+                width: "100%",
+                padding: "12px 14px",
+                borderRadius: 12,
+                border: "1px solid #d1d5db",
+                fontSize: 14,
+              }}
+            />
           </label>
         </div>
       </Card>
@@ -2115,70 +2389,55 @@ function Pricing({ products, expenses, setProducts, fmt }) {
             🎯 Resultado da Precificação
           </h3>
 
-          <div style={{ marginBottom: 18 }}>
-            <div
-              style={{
-                textTransform: "uppercase",
-                letterSpacing: 1,
-                fontSize: 11,
-                color: "#cbd5e1",
-                marginBottom: 10,
-                fontWeight: 800,
-              }}
-            >
-              Composição do custo
+          <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <span>🧵 Matéria-prima / insumos</span>
+              <strong>{money(materialTotal)}</strong>
             </div>
 
-            <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <span>🧵 Matéria-prima / custo base</span>
-                <strong>{money(materialTotal)}</strong>
-              </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <span>📦 Embalagem</span>
+              <strong>{money(packagingTotal)}</strong>
+            </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <span>📦 Embalagem</span>
-                <strong>{money(packagingTotal)}</strong>
-              </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <span>🚚 Frete / logística</span>
+              <strong>{money(shippingTotal)}</strong>
+            </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <span>🚚 Frete / logística</span>
-                <strong>{money(shippingTotal)}</strong>
-              </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <span>👩‍🏭 Mão de obra</span>
+              <strong>{money(laborTotal)}</strong>
+            </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <span>👩‍🏭 Mão de obra</span>
-                <strong>{money(laborTotal)}</strong>
-              </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <span>🧾 Rateio custos fixos</span>
+              <strong>{money(fixedCostPerUnit)}</strong>
+            </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <span>🧾 Rateio custos fixos</span>
-                <strong>{money(fixedCostPerUnit)}</strong>
-              </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <span>➕ Outros custos diretos</span>
+              <strong>{money(otherCostsTotal)}</strong>
+            </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <span>➕ Outros custos diretos</span>
-                <strong>{money(otherCostsTotal)}</strong>
-              </div>
+            <div
+              style={{
+                height: 1,
+                background: "rgba(255,255,255,.18)",
+                margin: "8px 0",
+              }}
+            />
 
-              <div
-                style={{
-                  height: 1,
-                  background: "rgba(255,255,255,.18)",
-                  margin: "8px 0",
-                }}
-              />
-
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  fontSize: 15,
-                }}
-              >
-                <strong>Custo total / unidade</strong>
-                <strong style={{ color: "#facc15" }}>{money(totalCost)}</strong>
-              </div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                fontSize: 15,
+              }}
+            >
+              <strong>Custo total por unidade</strong>
+              <strong style={{ color: "#facc15" }}>{money(totalCost)}</strong>
             </div>
           </div>
 
@@ -2189,6 +2448,7 @@ function Pricing({ products, expenses, setProducts, fmt }) {
               borderRadius: 16,
               background: "rgba(255,255,255,.08)",
               border: "1px solid rgba(255,255,255,.12)",
+              marginTop: 18,
               marginBottom: 16,
             }}
           >
@@ -2217,78 +2477,67 @@ function Pricing({ products, expenses, setProducts, fmt }) {
             </div>
 
             <div style={{ marginTop: 8, fontSize: 12, color: "#cbd5e1" }}>
-              Margem: {marginPercent}% · Imposto/taxa: {taxPercent}% · Lucro por un.:{" "}
-              {money(grossProfit)}
+              Margem: {marginPercent}% · Imposto/taxa: {taxPercent}% · Lucro por
+              unidade: {money(grossProfit)}
             </div>
           </div>
 
-          <div style={{ marginBottom: 16 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+              gap: 10,
+              marginBottom: 16,
+            }}
+          >
             <div
               style={{
-                textTransform: "uppercase",
-                letterSpacing: 1,
-                fontSize: 11,
-                color: "#cbd5e1",
-                marginBottom: 10,
-                fontWeight: 800,
+                background: "rgba(255,255,255,.09)",
+                border: "1px solid rgba(255,255,255,.12)",
+                borderRadius: 14,
+                padding: 12,
+                textAlign: "center",
               }}
             >
-              Faixas de preço
+              <div style={{ fontSize: 12, color: "#93c5fd", fontWeight: 800 }}>
+                🔵 Mínimo
+              </div>
+              <div style={{ fontSize: 17, fontWeight: 900 }}>
+                {money(minimumPrice)}
+              </div>
             </div>
 
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
-                gap: 10,
+                background: "rgba(255,255,255,.09)",
+                border: "1px solid rgba(255,255,255,.12)",
+                borderRadius: 14,
+                padding: 12,
+                textAlign: "center",
               }}
             >
-              <div
-                style={{
-                  background: "rgba(255,255,255,.09)",
-                  border: "1px solid rgba(255,255,255,.12)",
-                  borderRadius: 14,
-                  padding: 12,
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ fontSize: 12, color: "#93c5fd", fontWeight: 800 }}>
-                  🔵 Mínimo
-                </div>
-                <div style={{ fontSize: 17, fontWeight: 900 }}>{money(minimumPrice)}</div>
-                <small style={{ color: "#cbd5e1" }}>Cobre custos + margem básica</small>
+              <div style={{ fontSize: 12, color: "#86efac", fontWeight: 800 }}>
+                🟢 Ideal
               </div>
-
-              <div
-                style={{
-                  background: "rgba(255,255,255,.09)",
-                  border: "1px solid rgba(255,255,255,.12)",
-                  borderRadius: 14,
-                  padding: 12,
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ fontSize: 12, color: "#86efac", fontWeight: 800 }}>
-                  🟢 Ideal
-                </div>
-                <div style={{ fontSize: 17, fontWeight: 900 }}>{money(idealPrice)}</div>
-                <small style={{ color: "#cbd5e1" }}>Recomendado</small>
+              <div style={{ fontSize: 17, fontWeight: 900 }}>
+                {money(idealPrice)}
               </div>
+            </div>
 
-              <div
-                style={{
-                  background: "rgba(255,255,255,.09)",
-                  border: "1px solid rgba(255,255,255,.12)",
-                  borderRadius: 14,
-                  padding: 12,
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ fontSize: 12, color: "#fbbf24", fontWeight: 800 }}>
-                  ⭐ Premium
-                </div>
-                <div style={{ fontSize: 17, fontWeight: 900 }}>{money(premiumPrice)}</div>
-                <small style={{ color: "#cbd5e1" }}>Posicionamento premium</small>
+            <div
+              style={{
+                background: "rgba(255,255,255,.09)",
+                border: "1px solid rgba(255,255,255,.12)",
+                borderRadius: 14,
+                padding: 12,
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#fbbf24", fontWeight: 800 }}>
+                ⭐ Premium
+              </div>
+              <div style={{ fontSize: 17, fontWeight: 900 }}>
+                {money(premiumPrice)}
               </div>
             </div>
           </div>
@@ -2318,17 +2567,23 @@ function Pricing({ products, expenses, setProducts, fmt }) {
             <div style={{ display: "grid", gap: 8, fontSize: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                 <span>Receita projetada</span>
-                <strong style={{ color: "#4ade80" }}>{money(projectedRevenue)}</strong>
+                <strong style={{ color: "#4ade80" }}>
+                  {money(projectedRevenue)}
+                </strong>
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                 <span>Custos totais</span>
-                <strong style={{ color: "#f87171" }}>{money(projectedCosts)}</strong>
+                <strong style={{ color: "#f87171" }}>
+                  {money(projectedCosts)}
+                </strong>
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                 <span>Lucro projetado</span>
-                <strong style={{ color: "#93c5fd" }}>{money(projectedProfit)}</strong>
+                <strong style={{ color: "#93c5fd" }}>
+                  {money(projectedProfit)}
+                </strong>
               </div>
             </div>
           </div>
@@ -2336,26 +2591,28 @@ function Pricing({ products, expenses, setProducts, fmt }) {
           <button
             type="button"
             onClick={saveSuggestedPrice}
-            disabled={!selectedProduct || !suggestedPrice || suggestedPrice <= 0}
+            disabled={!suggestedPrice || suggestedPrice <= 0}
             style={{
               width: "100%",
               padding: "13px 16px",
               borderRadius: 14,
               border: "none",
               background:
-                !selectedProduct || !suggestedPrice || suggestedPrice <= 0
+                !suggestedPrice || suggestedPrice <= 0
                   ? "#6b7280"
                   : "linear-gradient(135deg, #7c3aed, #4f46e5)",
               color: "#fff",
               fontWeight: 900,
               fontSize: 15,
               cursor:
-                !selectedProduct || !suggestedPrice || suggestedPrice <= 0
+                !suggestedPrice || suggestedPrice <= 0
                   ? "not-allowed"
                   : "pointer",
             }}
           >
-            💾 Salvar preço sugerido no produto
+            {isNewProduct
+              ? "💾 Criar produto com preço sugerido"
+              : "💾 Salvar preço sugerido no produto"}
           </button>
 
           {saveMessage && (
@@ -2380,6 +2637,7 @@ function Pricing({ products, expenses, setProducts, fmt }) {
     </div>
   );
 }
+
 
 
 
