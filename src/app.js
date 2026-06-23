@@ -1149,154 +1149,383 @@ function Products({ products, setProducts, fmt, sales }) {
 // ─────────────────────────────────────────────
 // Sales
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Sales — venda com múltiplos itens + desconto
+// ─────────────────────────────────────────────
 function Sales({ sales, setSales, products, setProducts, filteredSales, fmt, selMonth, selYear }) {
-  const emptyForm = { productId:"", qty:"1", date: TODAY, note:"" };
-  const [form,    setForm]    = useState(emptyForm);
-  const [errors,  setErrors]  = useState({});
-  const [editing, setEditing] = useState(null);
-  const [confirm, setConfirm] = useState(null);
+  const emptyItem = { productId: "", qty: "1" };
+  const emptyForm = { items: [emptyItem], date: TODAY, note: "", discountType: "percent", discountValue: "" };
 
-  const selProd  = products.find(p => p.id === form.productId);
-  const subtotal = selProd ? selProd.price * (Number(form.qty) || 0) : 0;
+  const [form, setForm]       = useState(emptyForm);
+  const [errors, setErrors]   = useState({});
+  const [editing, setEditing] = useState(null); // saleGroup sendo editado
+  const [confirm, setConfirm] = useState(null); // saleGroup a excluir
 
-  const total    = filteredSales.reduce((sum, s) => {
-    const p = products.find(p => p.id === s.productId);
-    return sum + (p ? p.price * s.qty : 0);
-  }, 0);
+  // ── agrupa vendas pelo saleGroup ──
+  const grouped = useMemo(() => {
+    const map = new Map();
+    filteredSales.forEach(s => {
+      const g = s.saleGroup || s.id;
+      if (!map.has(g)) map.set(g, []);
+      map.get(g).push(s);
+    });
+    // ordena grupos por data desc
+    return Array.from(map.entries())
+      .sort((a, b) => (b[1][0]?.date || "").localeCompare(a[1][0]?.date || ""))
+      .map(([group, items]) => ({ group, items }));
+  }, [filteredSales]);
 
+  // ── total do período ──
+  const periodTotal = useMemo(() => {
+    return grouped.reduce((sum, { items }) => {
+      const gross = items.reduce((s, sale) => {
+        const p = products.find(p => p.id === sale.productId);
+        return s + (p ? p.price * sale.qty : 0);
+      }, 0);
+      const discount = items[0]?.discount || 0;
+      const discountType = items[0]?.discountType || "percent";
+      const discountAmt = discountType === "percent" ? gross * (discount / 100) : discount;
+      return sum + Math.max(0, gross - discountAmt);
+    }, 0);
+  }, [grouped, products]);
+
+  // ── helpers ──
+  const setItem = (idx, field, val) => {
+    const next = form.items.map((it, i) => i === idx ? { ...it, [field]: val } : it);
+    setForm(f => ({ ...f, items: next }));
+  };
+  const addItem    = () => setForm(f => ({ ...f, items: [...f.items, { ...emptyItem }] }));
+  const removeItem = idx => setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
+
+  const grossTotal = useMemo(() => {
+    return form.items.reduce((sum, it) => {
+      const p = products.find(p => p.id === it.productId);
+      return sum + (p ? p.price * (Number(it.qty) || 0) : 0);
+    }, 0);
+  }, [form.items, products]);
+
+  const discountAmount = useMemo(() => {
+    const v = parseFloat(form.discountValue) || 0;
+    if (form.discountType === "percent") return grossTotal * (v / 100);
+    return Math.min(v, grossTotal);
+  }, [form.discountValue, form.discountType, grossTotal]);
+
+  const netTotal = Math.max(0, grossTotal - discountAmount);
+
+  // ── validação ──
+  const validate = () => {
+    const errs = {};
+    if (!form.date) errs.date = "Data é obrigatória.";
+    if (form.date > TODAY) errs.date = "Data não pode ser no futuro.";
+    form.items.forEach((it, i) => {
+      if (!it.productId) errs[`pid_${i}`] = "Selecione um produto.";
+      const q = Number(it.qty);
+      if (!it.qty || !Number.isInteger(q) || q <= 0) errs[`qty_${i}`] = "Quantidade inválida.";
+    });
+    const dv = parseFloat(form.discountValue) || 0;
+    if (form.discountType === "value" && dv > grossTotal) errs.discount = "Desconto maior que o total.";
+    if (form.discountType === "percent" && (dv < 0 || dv > 100)) errs.discount = "Desconto deve ser entre 0 e 100%.";
+    return errs;
+  };
+
+  // ── salvar ──
   const save = () => {
-    const { valid, errors: errs } = validators.sale(form);
-    if (!valid) { setErrors(errs); return; }
-
-    const d = new Date(form.date);
-    const nextEntry = {
-      productId: form.productId,
-      qty: Number(form.qty),
-      date: form.date,
-      note: form.note,
-      month: d.getMonth() + 1,
-      year: d.getFullYear(),
-    };
-
-    const prevSale = editing ? sales.find(s => s.id === editing) : null;
-    const stockCheck = canApplySaleDelta(products, prevSale, nextEntry);
-
-    if (!stockCheck.ok) {
-      setErrors({
-        ...errs,
-        qty: `Estoque insuficiente para "${stockCheck.product.name}". Disponível: ${stockCheck.available}.`
-      });
-      return;
-    }
-
+    const errs = validate();
+    if (Object.keys(errs).length) { setErrors(errs); return; }
     setErrors({});
 
-    // 1) Atualiza estoque (sem permitir negativo)
-    setProducts(ps => applySaleDeltaToProducts(ps, prevSale, nextEntry));
+    const d = new Date(form.date);
+    const group = editing || uid();
+    const dv = parseFloat(form.discountValue) || 0;
 
-    // 2) Salva venda
+    // monta novos itens
+    const newEntries = form.items.map((it, idx) => ({
+      id: uid(),
+      productId: it.productId,
+      qty: Number(it.qty),
+      date: form.date,
+      note: idx === 0 ? form.note : "",
+      month: d.getMonth() + 1,
+      year: d.getFullYear(),
+      saleGroup: group,
+      discount: idx === 0 ? dv : 0,
+      discountType: idx === 0 ? form.discountType : "percent",
+    }));
+
+    // verifica estoque para todos os itens
+    for (const entry of newEntries) {
+      const prevSale = editing
+        ? sales.find(s => s.saleGroup === editing && s.productId === entry.productId)
+        : null;
+      const check = canApplySaleDelta(products, prevSale || null, entry);
+      if (!check.ok) {
+        setErrors({ [`qty_${newEntries.indexOf(entry)}`]: `Estoque insuficiente para "${check.product.name}". Disponível: ${check.available}.` });
+        return;
+      }
+    }
+
+    // atualiza estoque
     if (editing) {
-      setSales(ss => ss.map(s => s.id === editing ? { ...s, ...nextEntry } : s));
-      setEditing(null);
+      const oldItems = sales.filter(s => s.saleGroup === editing);
+      let updatedProducts = [...products];
+      oldItems.forEach(old => {
+        updatedProducts = applySaleDeltaToProducts(updatedProducts, old, null);
+      });
+      newEntries.forEach(ne => {
+        updatedProducts = applySaleDeltaToProducts(updatedProducts, null, ne);
+      });
+      setProducts(() => updatedProducts);
+      setSales(ss => [...ss.filter(s => s.saleGroup !== editing), ...newEntries]);
     } else {
-      setSales(ss => [...ss, { id: uid(), ...nextEntry }]);
+      newEntries.forEach(ne => setProducts(ps => applySaleDeltaToProducts(ps, null, ne)));
+      setSales(ss => [...ss, ...newEntries]);
     }
 
     setForm(emptyForm);
+    setEditing(null);
   };
 
-  const cancel = () => { setEditing(null); setForm(emptyForm); setErrors({}); };
+  // ── editar grupo ──
+  const startEdit = (group, items) => {
+    const first = items[0];
+    setForm({
+      items: items.map(s => ({ productId: s.productId, qty: String(s.qty) })),
+      date: first.date,
+      note: first.note || "",
+      discountType: first.discountType || "percent",
+      discountValue: first.discount ? String(first.discount) : "",
+    });
+    setEditing(group);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
-  const handleDelete = (saleId) => {
-    const sale = sales.find(s => s.id === saleId);
-    if (!sale) return;
-
-    // deletar venda = devolve estoque
-    setProducts(ps => applySaleDeltaToProducts(ps, sale, null));
-    setSales(ss => ss.filter(x => x.id !== saleId));
+  // ── excluir grupo ──
+  const deleteGroup = (group) => {
+    const items = sales.filter(s => s.saleGroup === group || s.id === group);
+    items.forEach(s => setProducts(ps => applySaleDeltaToProducts(ps, s, null)));
+    setSales(ss => ss.filter(s => (s.saleGroup || s.id) !== group));
     setConfirm(null);
   };
 
+  const cancel = () => { setForm(emptyForm); setEditing(null); setErrors({}); };
+
   return (
     <div>
+      {/* Cabeçalho */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
         <h2 style={{ fontSize:22, fontWeight:800, margin:0 }}>💰 Receitas</h2>
         <div style={{ textAlign:"right" }}>
-          <div style={{ fontSize:12, color:"#6b7280" }}>Total</div>
-          <div style={{ fontSize:22, fontWeight:800, color:"#10b981" }}>{fmt(total)}</div>
+          <div style={{ fontSize:12, color:"#6b7280" }}>Total no período</div>
+          <div style={{ fontSize:22, fontWeight:800, color:"#10b981" }}>{fmt(periodTotal)}</div>
         </div>
       </div>
 
+      {/* Formulário */}
       <Card>
-        <h3 style={{ margin:"0 0 12px", fontSize:16, fontWeight:700 }}>{editing ? "✏️ Editar" : "➕ Registrar venda"}</h3>
+        <h3 style={{ margin:"0 0 16px", fontSize:16, fontWeight:700 }}>
+          {editing ? "✏️ Editar venda" : "➕ Registrar venda"}
+        </h3>
 
-        <Sel
-          label="Produto/Serviço"
-          value={form.productId}
-          error={errors.productId}
-          onChange={v => setForm({ ...form, productId: v })}
-          hint="Selecione o que foi vendido"
-          options={[
-            { value:"", label:"— Selecione —" },
-            ...products.map(p => {
-              const st = stockOf(p);
-              const stockTag = isService(p) ? "" : ` · Estoque: ${st}`;
-              return ({
-                value: p.id,
-                label: `${p.cat==="Serviço"?"🛠️":"📦"} ${p.name} — ${fmt(p.price)}${stockTag}`
-              });
-            })
-          ]}
-        />
+        {/* Itens */}
+        {form.items.map((it, idx) => {
+          const selProd = products.find(p => p.id === it.productId);
+          const subtotal = selProd ? selProd.price * (Number(it.qty) || 0) : 0;
+          return (
+            <div key={idx} style={{ background:"#f8fafc", borderRadius:12, padding:14, marginBottom:10, border:"1.5px solid #e5e7eb" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                <span style={{ fontWeight:700, fontSize:13, color:"#6b7280" }}>Item {idx + 1}</span>
+                {form.items.length > 1 && (
+                  <button onClick={() => removeItem(idx)} style={{ background:"#fee2e2", border:"none", borderRadius:8, padding:"4px 10px", color:"#dc2626", fontWeight:700, cursor:"pointer", fontSize:12 }}>
+                    🗑️ Remover
+                  </button>
+                )}
+              </div>
 
-        <Inp label="Quantidade" type="number" value={form.qty} error={errors.qty} onChange={v => setForm({ ...form, qty: v })} placeholder="1" />
+              <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:10, alignItems:"start" }}>
+                <div>
+                  <select
+                    value={it.productId}
+                    onChange={e => setItem(idx, "productId", e.target.value)}
+                    style={{ width:"100%", padding:"10px 14px", border:`1.5px solid ${errors[`pid_${idx}`] ? "#ef4444" : "#e5e7eb"}`, borderRadius:10, fontSize:14, background:"#fff", outline:"none" }}
+                  >
+                    <option value="">— Selecione o produto —</option>
+                    {products.map(p => {
+                      const st = stockOf(p);
+                      return <option key={p.id} value={p.id}>{p.cat==="Serviço"?"🛠️":"📦"} {p.name} — {fmt(p.price)}{!isService(p) ? ` · Est: ${st}` : ""}</option>;
+                    })}
+                  </select>
+                  {errors[`pid_${idx}`] && <p style={{ color:"#ef4444", fontSize:12, margin:"4px 0 0", fontWeight:600 }}>⚠️ {errors[`pid_${idx}`]}</p>}
+                </div>
 
-        {selProd && !isService(selProd) && (
-          <div style={{ background:"#eff6ff", border:"1.5px solid #bfdbfe", borderRadius:10, padding:"10px 14px", marginBottom:14, fontWeight:700, color:"#1d4ed8" }}>
-            📦 Estoque disponível: {stockOf(selProd)}
+                <div style={{ width:90 }}>
+                  <input
+                    type="number"
+                    value={it.qty}
+                    onChange={e => setItem(idx, "qty", e.target.value)}
+                    placeholder="Qtd"
+                    style={{ width:"100%", padding:"10px 12px", border:`1.5px solid ${errors[`qty_${idx}`] ? "#ef4444" : "#e5e7eb"}`, borderRadius:10, fontSize:14, outline:"none" }}
+                  />
+                  {errors[`qty_${idx}`] && <p style={{ color:"#ef4444", fontSize:11, margin:"4px 0 0", fontWeight:600 }}>⚠️ {errors[`qty_${idx}`]}</p>}
+                </div>
+              </div>
+
+              {selProd && (
+                <div style={{ marginTop:8, fontSize:13, color:"#15803d", fontWeight:700 }}>
+                  💵 Subtotal: {fmt(subtotal)}
+                  {!isService(selProd) && <span style={{ color:"#1d4ed8", marginLeft:12 }}>📦 Estoque: {stockOf(selProd)}</span>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Adicionar item */}
+        <button onClick={addItem} style={{ width:"100%", padding:"10px", borderRadius:10, border:"2px dashed #c7d2fe", background:"#f5f3ff", color:"#6366f1", fontWeight:700, fontSize:14, cursor:"pointer", marginBottom:16 }}>
+          ➕ Adicionar outro produto
+        </button>
+
+        {/* Desconto */}
+        <div style={{ background:"#fffbeb", border:"1.5px solid #fde68a", borderRadius:12, padding:14, marginBottom:14 }}>
+          <div style={{ fontWeight:700, fontSize:14, marginBottom:10, color:"#92400e" }}>🏷️ Desconto (opcional)</div>
+          <div style={{ display:"flex", gap:10 }}>
+            <select
+              value={form.discountType}
+              onChange={e => setForm(f => ({ ...f, discountType: e.target.value, discountValue: "" }))}
+              style={{ padding:"10px 12px", borderRadius:10, border:"1.5px solid #fde68a", background:"#fff", fontWeight:700, fontSize:14, outline:"none" }}
+            >
+              <option value="percent">% Porcentagem</option>
+              <option value="value">R$ Valor fixo</option>
+            </select>
+            <input
+              type="number"
+              value={form.discountValue}
+              onChange={e => setForm(f => ({ ...f, discountValue: e.target.value }))}
+              placeholder={form.discountType === "percent" ? "Ex: 10" : "Ex: 5,00"}
+              style={{ flex:1, padding:"10px 14px", borderRadius:10, border:`1.5px solid ${errors.discount ? "#ef4444" : "#fde68a"}`, fontSize:14, outline:"none" }}
+            />
+          </div>
+          {errors.discount && <p style={{ color:"#ef4444", fontSize:12, margin:"6px 0 0", fontWeight:600 }}>⚠️ {errors.discount}</p>}
+          {discountAmount > 0 && (
+            <div style={{ marginTop:8, fontSize:13, color:"#92400e", fontWeight:700 }}>
+              Desconto: -{fmt(discountAmount)}
+            </div>
+          )}
+        </div>
+
+        {/* Totais */}
+        {grossTotal > 0 && (
+          <div style={{ background:"#f0fdf4", border:"1.5px solid #bbf7d0", borderRadius:12, padding:14, marginBottom:14 }}>
+            {discountAmount > 0 && <div style={{ fontSize:13, color:"#6b7280", marginBottom:4 }}>Subtotal: {fmt(grossTotal)}</div>}
+            {discountAmount > 0 && <div style={{ fontSize:13, color:"#ef4444", marginBottom:4 }}>Desconto: -{fmt(discountAmount)}</div>}
+            <div style={{ fontSize:18, fontWeight:800, color:"#15803d" }}>💵 Total: {fmt(netTotal)}</div>
           </div>
         )}
 
-        {selProd && (
-          <div style={{ background:"#f0fdf4", border:"1.5px solid #bbf7d0", borderRadius:10, padding:"10px 14px", marginBottom:14, fontWeight:700, color:"#15803d" }}>
-            💵 Subtotal: {fmt(subtotal)}
+        {/* Data e observação */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
+          <div>
+            <label style={{ display:"block", fontWeight:600, fontSize:14, marginBottom:5, color:"#374151" }}>Data</label>
+            <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+              style={{ width:"100%", padding:"10px 14px", border:`1.5px solid ${errors.date ? "#ef4444" : "#e5e7eb"}`, borderRadius:10, fontSize:14, outline:"none" }} />
+            {errors.date && <p style={{ color:"#ef4444", fontSize:12, margin:"4px 0 0", fontWeight:600 }}>⚠️ {errors.date}</p>}
           </div>
-        )}
+          <div>
+            <label style={{ display:"block", fontWeight:600, fontSize:14, marginBottom:5, color:"#374151" }}>Observação</label>
+            <input type="text" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+              placeholder="Ex: Pix, cartão..."
+              style={{ width:"100%", padding:"10px 14px", border:"1.5px solid #e5e7eb", borderRadius:10, fontSize:14, outline:"none" }} />
+          </div>
+        </div>
 
-        <Inp label="Data" type="date" value={form.date} error={errors.date} onChange={v => setForm({ ...form, date: v })} />
-        <Inp label="Observação" value={form.note} onChange={v => setForm({ ...form, note: v })} placeholder="Ex: Pagamento via Pix" />
         <div style={{ display:"flex", gap:8 }}>
-          <Btn onClick={save} color="green">{editing ? "💾 Salvar" : "➕ Registrar"}</Btn>
-          {editing && <Btn outline onClick={cancel}>Cancelar</Btn>}
+          <button onClick={save} style={{ background:"#10b981", color:"#fff", border:"none", borderRadius:10, padding:"10px 24px", fontWeight:700, fontSize:15, cursor:"pointer" }}>
+            {editing ? "💾 Salvar alterações" : "➕ Registrar venda"}
+          </button>
+          {editing && (
+            <button onClick={cancel} style={{ background:"transparent", color:"#6366f1", border:"2px solid #6366f1", borderRadius:10, padding:"10px 20px", fontWeight:700, fontSize:15, cursor:"pointer" }}>
+              Cancelar
+            </button>
+          )}
         </div>
       </Card>
 
-      {filteredSales.length === 0 && <div style={{ textAlign:"center", padding:40, color:"#9ca3af" }}>Nenhuma venda neste período.</div>}
+      {/* Lista de vendas agrupadas */}
+      {grouped.length === 0 && (
+        <div style={{ textAlign:"center", padding:40, color:"#9ca3af" }}>Nenhuma venda neste período.</div>
+      )}
 
-      {filteredSales.slice().reverse().map(s => {
-        const p   = products.find(x => x.id === s.productId);
-        const val = p ? p.price * s.qty : 0;
+      {grouped.map(({ group, items }) => {
+        const gross = items.reduce((s, sale) => {
+          const p = products.find(p => p.id === sale.productId);
+          return s + (p ? p.price * sale.qty : 0);
+        }, 0);
+        const discount = items[0]?.discount || 0;
+        const dtype = items[0]?.discountType || "percent";
+        const discAmt = dtype === "percent" ? gross * (discount / 100) : discount;
+        const net = Math.max(0, gross - discAmt);
+        const dateStr = items[0]?.date ? new Date(items[0].date + "T12:00:00").toLocaleDateString("pt-BR") : "";
+        const note = items[0]?.note || "";
+
         return (
-          <Card key={s.id}>
+          <Card key={group}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-              <div>
-                <div style={{ fontWeight:700, fontSize:16 }}>{p ? p.name : "Produto removido"}</div>
-                <div style={{ color:"#6b7280", fontSize:13 }}>{s.qty}x {p ? fmt(p.price) : "—"} · {new Date(s.date + "T12:00:00").toLocaleDateString("pt-BR")}</div>
-                {s.note && <div style={{ fontSize:12, color:"#9ca3af" }}>💬 {s.note}</div>}
-              </div>
-              <div style={{ textAlign:"right" }}>
-                <div style={{ fontWeight:800, fontSize:18, color:"#10b981" }}>{fmt(val)}</div>
-                <div style={{ display:"flex", gap:6, marginTop:6 }}>
-                  <Btn small outline onClick={() => { setForm({ productId: s.productId, qty: String(s.qty), date: s.date, note: s.note || "" }); setEditing(s.id); setErrors({}); }}>✏️</Btn>
-                  <Btn small danger onClick={() => setConfirm(s.id)}>🗑️</Btn>
+              <div style={{ flex:1 }}>
+                {/* Itens da venda */}
+                {items.map((s, i) => {
+                  const p = products.find(x => x.id === s.productId);
+                  return (
+                    <div key={s.id} style={{ display:"flex", justifyContent:"space-between", marginBottom:i < items.length-1 ? 6 : 0 }}>
+                      <span style={{ fontSize:14, color:"#374151" }}>
+                        {p ? p.name : "Produto removido"} × {s.qty}
+                      </span>
+                      <span style={{ fontSize:14, color:"#6b7280" }}>{fmt(p ? p.price * s.qty : 0)}</span>
+                    </div>
+                  );
+                })}
+
+                {/* Desconto */}
+                {discAmt > 0 && (
+                  <div style={{ display:"flex", justifyContent:"space-between", marginTop:6, color:"#dc2626", fontSize:13, fontWeight:600 }}>
+                    <span>🏷️ Desconto {dtype === "percent" ? `(${discount}%)` : ""}</span>
+                    <span>-{fmt(discAmt)}</span>
+                  </div>
+                )}
+
+                {/* Linha divisória + total */}
+                <div style={{ borderTop:"1px solid #f3f4f6", marginTop:8, paddingTop:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <div style={{ fontSize:12, color:"#9ca3af" }}>
+                    📅 {dateStr}
+                    {note && <span> · 💬 {note}</span>}
+                  </div>
+                  <div style={{ fontWeight:800, fontSize:18, color:"#10b981" }}>{fmt(net)}</div>
                 </div>
               </div>
+
+              {/* Ações */}
+              <div style={{ display:"flex", flexDirection:"column", gap:6, marginLeft:12 }}>
+                <button onClick={() => startEdit(group, items)}
+                  style={{ background:"transparent", border:"2px solid #6366f1", color:"#6366f1", borderRadius:8, padding:"5px 10px", fontWeight:700, cursor:"pointer", fontSize:12 }}>
+                  ✏️
+                </button>
+                <button onClick={() => setConfirm(group)}
+                  style={{ background:"#fee2e2", border:"none", color:"#dc2626", borderRadius:8, padding:"5px 10px", fontWeight:700, cursor:"pointer", fontSize:12 }}>
+                  🗑️
+                </button>
+              </div>
             </div>
-            {confirm === s.id && (
+
+            {/* Confirmação de exclusão */}
+            {confirm === group && (
               <div style={{ marginTop:10, padding:10, background:"#fee2e2", borderRadius:10, display:"flex", gap:10, alignItems:"center" }}>
-                <span style={{ fontSize:13, fontWeight:600 }}>⚠️ Excluir?</span>
-                <Btn small danger onClick={() => handleDelete(s.id)}>Sim</Btn>
-                <Btn small outline onClick={() => setConfirm(null)}>Não</Btn>
+                <span style={{ fontSize:13, fontWeight:600 }}>⚠️ Excluir esta venda?</span>
+                <button onClick={() => deleteGroup(group)}
+                  style={{ background:"#ef4444", color:"#fff", border:"none", borderRadius:8, padding:"5px 12px", fontWeight:700, cursor:"pointer", fontSize:13 }}>
+                  Sim
+                </button>
+                <button onClick={() => setConfirm(null)}
+                  style={{ background:"transparent", border:"2px solid #6366f1", color:"#6366f1", borderRadius:8, padding:"5px 12px", fontWeight:700, cursor:"pointer", fontSize:13 }}>
+                  Cancelar
+                </button>
               </div>
             )}
           </Card>
